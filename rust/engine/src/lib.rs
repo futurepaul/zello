@@ -1,8 +1,10 @@
 use parking_lot::Mutex;
+use peniko::{Color, kurbo};
 use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::Arc;
+use vello::{AaSupport, Renderer, RendererOptions, Scene};
 
 #[derive(Debug, thiserror::Error)]
 enum EngineError {
@@ -10,6 +12,8 @@ enum EngineError {
     Wgpu(String),
     #[error("invalid surface")]
     InvalidSurface,
+    #[error("vello error: {0}")]
+    Vello(String),
 }
 
 thread_local! {
@@ -62,6 +66,26 @@ pub struct McoreSurfaceDesc {
     pub u: McoreSurfaceUnion,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreRgba {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreRoundedRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub radius: f32,
+    pub fill: McoreRgba,
+}
+
 struct Gfx {
     instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
@@ -69,6 +93,7 @@ struct Gfx {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    renderer: Renderer,
     size: (u32, u32),
     scale: f32,
 }
@@ -103,12 +128,16 @@ impl Gfx {
             .await
             .ok_or_else(|| EngineError::Wgpu("no adapter".into()))?;
 
+        // Request device with higher limits for Vello
+        let mut limits = wgpu::Limits::default();
+        limits.max_storage_buffers_per_shader_stage = 8;
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("mcore-device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults(),
+                    required_limits: limits,
                 },
                 None,
             )
@@ -136,6 +165,18 @@ impl Gfx {
         };
         surface.configure(&device, &config);
 
+        // Create Vello renderer
+        let renderer = Renderer::new(
+            &device,
+            RendererOptions {
+                surface_format: Some(format),
+                use_cpu: false,
+                antialiasing_support: AaSupport::all(),
+                num_init_threads: None,
+            },
+        )
+        .map_err(|e| EngineError::Vello(format!("{e:?}")))?;
+
         Ok(Self {
             instance,
             surface,
@@ -143,6 +184,7 @@ impl Gfx {
             device,
             queue,
             config,
+            renderer,
             size: (w, h),
             scale: desc.scale_factor,
         })
@@ -159,41 +201,27 @@ impl Gfx {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn render_clear(&mut self, rgba: [f32; 4]) -> Result<(), EngineError> {
+    fn render_scene(&mut self, scene: &Scene, clear_color: Color) -> Result<(), EngineError> {
         let frame = self
             .surface
             .get_current_texture()
             .map_err(|e| EngineError::Wgpu(format!("acquire: {e:?}")))?;
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("mcore-encoder"),
-            });
 
-        {
-            let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("mcore-clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: rgba[0] as f64,
-                            g: rgba[1] as f64,
-                            b: rgba[2] as f64,
-                            a: rgba[3] as f64,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-        }
+        self.renderer
+            .render_to_surface(
+                &self.device,
+                &self.queue,
+                scene,
+                &frame,
+                &vello::RenderParams {
+                    base_color: clear_color,
+                    width: self.size.0,
+                    height: self.size.1,
+                    antialiasing_method: vello::AaConfig::Msaa16,
+                },
+            )
+            .map_err(|e| EngineError::Vello(format!("{e:?}")))?;
 
-        self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
         Ok(())
     }
@@ -201,15 +229,8 @@ impl Gfx {
 
 struct Engine {
     gfx: Gfx,
+    scene: Scene,
     time_s: f64,
-}
-
-#[repr(C)]
-pub struct McoreRgba {
-    pub r: f32,
-    pub g: f32,
-    pub b: f32,
-    pub a: f32,
 }
 
 #[repr(C)]
@@ -232,6 +253,7 @@ pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreConte
                 Ok(engine) => {
                     let eng = Engine {
                         gfx: engine,
+                        scene: Scene::new(),
                         time_s: 0.0,
                     };
                     Box::into_raw(Box::new(McoreContext(Arc::new(Mutex::new(eng)))))
@@ -263,9 +285,11 @@ pub extern "C" fn mcore_resize(ctx: *mut McoreContext, desc: *const McoreSurface
     if let McorePlatform::MacOS = desc.platform {
         let mac = unsafe { desc.u.macos };
         let mut guard = ctx.0.lock();
-        guard
-            .gfx
-            .resize(mac.width_px.max(1) as u32, mac.height_px.max(1) as u32, mac.scale_factor);
+        guard.gfx.resize(
+            mac.width_px.max(1) as u32,
+            mac.height_px.max(1) as u32,
+            mac.scale_factor,
+        );
     }
 }
 
@@ -274,6 +298,37 @@ pub extern "C" fn mcore_begin_frame(ctx: *mut McoreContext, time_seconds: f64) {
     let ctx = unsafe { ctx.as_mut() }.unwrap();
     let mut guard = ctx.0.lock();
     guard.time_s = time_seconds;
+    guard.scene.reset();
+}
+
+#[no_mangle]
+pub extern "C" fn mcore_rect_rounded(ctx: *mut McoreContext, rect: *const McoreRoundedRect) {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let rect = unsafe { rect.as_ref() }.unwrap();
+    let mut guard = ctx.0.lock();
+
+    let shape = kurbo::RoundedRect::new(
+        rect.x as f64,
+        rect.y as f64,
+        (rect.x + rect.w) as f64,
+        (rect.y + rect.h) as f64,
+        rect.radius as f64,
+    );
+
+    let color = Color::rgba(
+        rect.fill.r as f64,
+        rect.fill.g as f64,
+        rect.fill.b as f64,
+        rect.fill.a as f64,
+    );
+
+    guard.scene.fill(
+        vello::peniko::Fill::NonZero,
+        kurbo::Affine::IDENTITY,
+        color,
+        None,
+        &shape,
+    );
 }
 
 #[no_mangle]
@@ -281,16 +336,19 @@ pub extern "C" fn mcore_end_frame_present(ctx: *mut McoreContext, clear: McoreRg
     let ctx = unsafe { ctx.as_mut() }.unwrap();
     let mut guard = ctx.0.lock();
 
-    // animate the clear a tiny bit so you know frames are ticking
+    // Animate clear color based on time
     let t = guard.time_s as f32;
-    let c = [
-        (clear.r + 0.1 * (t).sin()).clamp(0.0, 1.0),
-        (clear.g + 0.1 * (t * 1.3).sin()).clamp(0.0, 1.0),
-        (clear.b + 0.1 * (t * 1.7).sin()).clamp(0.0, 1.0),
-        clear.a,
-    ];
+    let clear_color = Color::rgba(
+        (clear.r + 0.05 * (t).sin()).clamp(0.0, 1.0) as f64,
+        (clear.g + 0.05 * (t * 1.3).sin()).clamp(0.0, 1.0) as f64,
+        (clear.b + 0.05 * (t * 1.7).sin()).clamp(0.0, 1.0) as f64,
+        clear.a as f64,
+    );
 
-    match guard.gfx.render_clear(c) {
+    // Clone the scene to avoid borrow conflict
+    let scene = guard.scene.clone();
+
+    match guard.gfx.render_scene(&scene, clear_color) {
         Ok(_) => McoreStatus::Ok,
         Err(e) => {
             set_err(e);

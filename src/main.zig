@@ -26,6 +26,25 @@ fn on_resize(w: c_int, h: c_int, scale: f32) callconv(.C) void {
 fn on_frame(t: f64) callconv(.C) void {
     if (g_ctx) |ctx| {
         c.mcore_begin_frame(ctx, t);
+
+        // Draw a rounded rect with animated color
+        const t_f: f32 = @floatCast(t);
+        const hue = @mod(t_f * 0.2, 1.0);
+        const rect = c.mcore_rounded_rect_t{
+            .x = 40,
+            .y = 40,
+            .w = 200,
+            .h = 100,
+            .radius = 12,
+            .fill = .{
+                .r = 0.2 + 0.5 * @sin(hue * 6.28),
+                .g = 0.4 + 0.3 * @cos(hue * 6.28),
+                .b = 0.9,
+                .a = 1.0,
+            },
+        };
+        c.mcore_rect_rounded(ctx, &rect);
+
         const clear = c.mcore_rgba_t{ .r = 0.15, .g = 0.15, .b = 0.20, .a = 1.0 };
         const st = c.mcore_end_frame_present(ctx, clear);
         if (st != c.MCORE_OK) {

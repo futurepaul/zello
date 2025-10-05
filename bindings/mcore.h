@@ -32,6 +32,12 @@ typedef struct {
 
 typedef struct { float r,g,b,a; } mcore_rgba_t;
 
+typedef struct {
+  float x, y, w, h;
+  float radius;
+  mcore_rgba_t fill;
+} mcore_rounded_rect_t;
+
 typedef enum { MCORE_OK = 0, MCORE_ERR = 1 } mcore_status_t;
 
 // Lifecycle
@@ -43,6 +49,7 @@ void mcore_resize(mcore_context_t* ctx, const mcore_surface_desc_t* desc);
 
 // Frame
 void mcore_begin_frame(mcore_context_t* ctx, double time_seconds);
+void mcore_rect_rounded(mcore_context_t* ctx, const mcore_rounded_rect_t* rect);
 mcore_status_t mcore_end_frame_present(mcore_context_t* ctx, mcore_rgba_t clear);
 
 // Diagnostics
