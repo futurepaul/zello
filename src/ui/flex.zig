@@ -49,9 +49,10 @@ pub const FlexContainer = struct {
             .Vertical => constraints.max_height,
         };
 
-        // 1. Measure fixed children
+        // 1. Measure fixed children and find maximum cross-axis size
         var used: f32 = self.padding * 2;
         var flex_total: f32 = 0;
+        var max_cross: f32 = 0;
 
         for (self.children.items) |child| {
             if (child.flex == 0) {
@@ -62,6 +63,13 @@ pub const FlexContainer = struct {
             } else {
                 flex_total += child.flex;
             }
+
+            // Track maximum cross-axis size
+            const child_cross = switch (self.axis) {
+                .Horizontal => child.size.height,
+                .Vertical => child.size.width,
+            };
+            max_cross = @max(max_cross, child_cross);
         }
 
         if (self.children.items.len > 1) {
@@ -84,10 +92,8 @@ pub const FlexContainer = struct {
                 .Vertical => child.size.height,
             };
 
-            const cross_size = switch (self.axis) {
-                .Horizontal => child.size.height,
-                .Vertical => child.size.width,
-            };
+            // Use max_cross for all children (ensures spacers get proper height/width)
+            const cross_size = max_cross;
 
             results[i] = switch (self.axis) {
                 .Horizontal => .{

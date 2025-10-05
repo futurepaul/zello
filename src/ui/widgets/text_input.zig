@@ -9,6 +9,7 @@ pub const TextInput = struct {
     buffer: [256]u8 = undefined,
     width: f32,
     height: f32,
+    scroll_offset: f32 = 0, // Horizontal scroll for overflow text
 
     pub fn init(id: u64, width: f32, height: f32) TextInput {
         return .{
@@ -30,6 +31,7 @@ pub const TextInput = struct {
         x: f32,
         y: f32,
         is_focused: bool,
+        debug_bounds: bool,
     ) void {
         // Get current text from Rust
         const len = c.mcore_text_input_get(ctx, self.id, &self.buffer, 256);
@@ -52,29 +54,71 @@ pub const TextInput = struct {
         }
 
         // Measure text to get proper height for vertical centering
+        // Use large max_width to prevent wrapping in single-line input
+        const max_width_no_wrap: f32 = 100000;
         var text_size: c.mcore_text_size_t = undefined;
         const text_ptr: [*:0]const u8 = if (text.len > 0) @ptrCast(text.ptr) else "";
-        c.mcore_measure_text(ctx, text_ptr, 16, self.width - (PADDING_X * 2), &text_size);
+        c.mcore_measure_text(ctx, text_ptr, 16, max_width_no_wrap, &text_size);
 
         // Center text vertically
         const text_y = y + (self.height - text_size.height) / 2.0;
 
-        // Draw text
+        // Calculate scroll offset to keep cursor visible (do this before rendering)
+        const visible_width = self.width - (PADDING_X * 2);
+        if (is_focused) {
+            const cursor_pos = c.mcore_text_input_cursor(ctx, self.id);
+            const cursor_offset_x = c.mcore_measure_text_to_byte_offset(ctx, text_ptr, 16, cursor_pos);
+            const cursor_right_margin: f32 = 20;
+
+            // If cursor is past the right edge, scroll left
+            if (cursor_offset_x - self.scroll_offset > visible_width - cursor_right_margin) {
+                self.scroll_offset = cursor_offset_x - visible_width + cursor_right_margin;
+            }
+            // If cursor is before the left edge, scroll right
+            if (cursor_offset_x < self.scroll_offset) {
+                self.scroll_offset = cursor_offset_x;
+            }
+            // Don't scroll past the beginning
+            if (self.scroll_offset < 0) {
+                self.scroll_offset = 0;
+            }
+        }
+
+        // Push clip rect to prevent text overflow
+        cmd_buffer.pushClip(x, y, self.width, self.height) catch {};
+
+        // Draw text with scroll offset applied
         const text_color = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
-        cmd_buffer.text(text_ptr, x + PADDING_X, text_y, 16, self.width - (PADDING_X * 2), text_color) catch {};
+        const text_x = x + PADDING_X - self.scroll_offset;
+        cmd_buffer.text(text_ptr, text_x, text_y, 16, max_width_no_wrap, text_color) catch {};
 
         // Draw cursor if focused
         if (is_focused) {
             const cursor_pos = c.mcore_text_input_cursor(ctx, self.id);
-
-            const cursor_x = x + PADDING_X + text_size.width;
+            const cursor_offset_x = c.mcore_measure_text_to_byte_offset(ctx, text_ptr, 16, cursor_pos);
+            const cursor_x = x + PADDING_X + cursor_offset_x - self.scroll_offset;
             const cursor_color = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
 
             // Draw cursor as a thin vertical line, height based on line height
             const cursor_height = text_size.height;
             cmd_buffer.roundedRect(cursor_x, text_y, 2, cursor_height, 1, cursor_color) catch {};
+        }
 
-            _ = cursor_pos; // TODO: Use for accurate cursor positioning
+        // Pop clip rect
+        cmd_buffer.popClip() catch {};
+
+        // Debug bounds
+        if (debug_bounds) {
+            const debug_color = [4]f32{ 0.0, 1.0, 0.0, 0.9 }; // Green for interactive widgets
+            const line_width: f32 = 2;
+            // Top edge
+            cmd_buffer.roundedRect(x, y, self.width, line_width, 0, debug_color) catch {};
+            // Bottom edge
+            cmd_buffer.roundedRect(x, y + self.height - line_width, self.width, line_width, 0, debug_color) catch {};
+            // Left edge
+            cmd_buffer.roundedRect(x, y, line_width, self.height, 0, debug_color) catch {};
+            // Right edge
+            cmd_buffer.roundedRect(x + self.width - line_width, y, line_width, self.height, 0, debug_color) catch {};
         }
     }
 

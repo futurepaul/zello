@@ -632,6 +632,98 @@ pub extern "C" fn mcore_measure_text(
 }
 
 #[no_mangle]
+pub extern "C" fn mcore_measure_text_to_byte_offset(
+    ctx: *mut McoreContext,
+    text: *const i8,
+    font_size: f32,
+    byte_offset: i32,
+) -> f32 {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let text = unsafe { CStr::from_ptr(text) }.to_str().unwrap_or("");
+    let mut guard = ctx.0.lock();
+
+    let scale = guard.gfx.scale;
+    let byte_offset = byte_offset.max(0) as usize;
+    let byte_offset = byte_offset.min(text.len());
+
+    // Split borrows
+    let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
+    let mut layout: Layout<Brush> = unsafe {
+        let text_cx = &mut *text_cx_ptr;
+        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
+        builder.push_default(StyleProperty::FontSize(font_size));
+        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
+        builder.build(text)
+    };
+
+    // Measure cursor position by adding a marker character after the cursor position
+    // This prevents trailing space collapse issues
+    if byte_offset == 0 {
+        return 0.0;
+    }
+
+    // Use a very large max_width to prevent wrapping in single-line inputs
+    let max_width_no_wrap = 100000.0;
+
+    if byte_offset >= text.len() {
+        // Cursor at end - use marker to handle trailing spaces
+        let text_with_marker = format!("{}|", text);
+        let mut marked_layout: Layout<Brush> = unsafe {
+            let text_cx = &mut *text_cx_ptr;
+            let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, &text_with_marker, scale, true);
+            builder.push_default(StyleProperty::FontSize(font_size));
+            builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
+            builder.build(&text_with_marker)
+        };
+        marked_layout.break_all_lines(Some(max_width_no_wrap));
+        marked_layout.align(None, Alignment::Start, AlignmentOptions::default());
+
+        // Measure marker
+        let mut marker_layout: Layout<Brush> = unsafe {
+            let text_cx = &mut *text_cx_ptr;
+            let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, "|", scale, true);
+            builder.push_default(StyleProperty::FontSize(font_size));
+            builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
+            builder.build("|")
+        };
+        marker_layout.break_all_lines(Some(max_width_no_wrap));
+        marker_layout.align(None, Alignment::Start, AlignmentOptions::default());
+
+        return marked_layout.width() - marker_layout.width();
+    }
+
+    // Get the substring up to the cursor and add a visible marker
+    let text_up_to_cursor = &text[..byte_offset];
+    let text_with_marker = format!("{}|", text_up_to_cursor);
+
+    // Measure with the marker
+    let mut marked_layout: Layout<Brush> = unsafe {
+        let text_cx = &mut *text_cx_ptr;
+        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, &text_with_marker, scale, true);
+        builder.push_default(StyleProperty::FontSize(font_size));
+        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
+        builder.build(&text_with_marker)
+    };
+
+    marked_layout.break_all_lines(Some(max_width_no_wrap));
+    marked_layout.align(None, Alignment::Start, AlignmentOptions::default());
+
+    // Now measure just the marker character to subtract its width
+    let mut marker_layout: Layout<Brush> = unsafe {
+        let text_cx = &mut *text_cx_ptr;
+        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, "|", scale, true);
+        builder.push_default(StyleProperty::FontSize(font_size));
+        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
+        builder.build("|")
+    };
+
+    marker_layout.break_all_lines(Some(max_width_no_wrap));
+    marker_layout.align(None, Alignment::Start, AlignmentOptions::default());
+
+    marked_layout.width() - marker_layout.width()
+}
+
+#[no_mangle]
 pub extern "C" fn mcore_text_draw(
     ctx: *mut McoreContext,
     req: *const McoreTextReq,
@@ -698,6 +790,30 @@ pub extern "C" fn mcore_text_draw(
                 );
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn mcore_push_clip_rect(
+    ctx: *mut McoreContext,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let mut guard = ctx.0.lock();
+
+    // Push a clip layer with the specified rectangle
+    use kurbo::Rect;
+    let clip_rect = Rect::new(x as f64, y as f64, (x + width) as f64, (y + height) as f64);
+    guard.scene.push_layer(vello::peniko::BlendMode::default(), 1.0, kurbo::Affine::IDENTITY, &clip_rect);
+}
+
+#[no_mangle]
+pub extern "C" fn mcore_pop_clip(ctx: *mut McoreContext) {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let mut guard = ctx.0.lock();
+    guard.scene.pop_layer();
 }
 
 #[no_mangle]
@@ -781,6 +897,21 @@ pub extern "C" fn mcore_render_commands(
                             );
                     }
                 }
+            }
+            2 => {
+                // PushClip
+                use kurbo::Rect;
+                let clip_rect = Rect::new(
+                    cmd.x as f64,
+                    cmd.y as f64,
+                    (cmd.x + cmd.width) as f64,
+                    (cmd.y + cmd.height) as f64,
+                );
+                guard.scene.push_layer(vello::peniko::BlendMode::default(), 1.0, kurbo::Affine::IDENTITY, &clip_rect);
+            }
+            3 => {
+                // PopClip
+                guard.scene.pop_layer();
             }
             _ => {}
         }

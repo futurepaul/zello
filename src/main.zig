@@ -43,6 +43,10 @@ var g_button_bounds: [MAX_BUTTONS]layout_mod.Rect = undefined;
 var g_button_ids: [MAX_BUTTONS]u64 = undefined;
 var g_button_count: usize = 0;
 
+// Debug rendering
+var g_debug_bounds: bool = false;
+var g_debug_button_id: u64 = 0;
+
 const KEY_TAB = 48; // macOS key code for Tab
 const MOUSE_DOWN: c_int = 0;
 const MOUSE_UP: c_int = 1;
@@ -84,6 +88,13 @@ fn checkButtonClick() void {
     for (g_button_bounds[0..g_button_count], g_button_ids[0..g_button_count]) |bounds, id| {
         if (isPointInRect(g_mouse_x, g_mouse_y, bounds.x, bounds.y, bounds.width, bounds.height)) {
             std.debug.print("Button clicked! Setting focus to ID {d}\n", .{id});
+
+            // Special handling for debug toggle button
+            if (id == g_debug_button_id) {
+                g_debug_bounds = !g_debug_bounds;
+                std.debug.print("Debug bounds toggled: {}\n", .{g_debug_bounds});
+            }
+
             // Set focus to clicked button
             g_focus.setFocus(id);
             return;
@@ -106,13 +117,29 @@ fn on_mouse(event_type: c_int, x: f32, y: f32) callconv(.c) void {
     // MOUSE_MOVED events are silent for now
 }
 
-fn drawButton(label: [*:0]const u8, x: f32, y: f32, id: u64, is_focused: bool) void {
-    const button_w: f32 = 180;
-    const button_h: f32 = 50;
+const ButtonSize = struct {
+    width: f32,
+    height: f32,
+};
 
+fn measureButton(ctx: *c.mcore_context_t, label: [*:0]const u8) ButtonSize {
+    const padding_x: f32 = 20;
+    const padding_y: f32 = 15;
+    const font_size: f32 = 18;
+
+    var text_size: c.mcore_text_size_t = undefined;
+    c.mcore_measure_text(ctx, label, font_size, 1000, &text_size); // Large max_width to avoid wrapping
+
+    return .{
+        .width = text_size.width + (padding_x * 2),
+        .height = text_size.height + (padding_y * 2),
+    };
+}
+
+fn drawButton(ctx: *c.mcore_context_t, label: [*:0]const u8, x: f32, y: f32, width: f32, height: f32, id: u64, is_focused: bool) void {
     // Store button bounds for hit testing
     if (g_button_count < MAX_BUTTONS) {
-        g_button_bounds[g_button_count] = .{ .x = x, .y = y, .width = button_w, .height = button_h };
+        g_button_bounds[g_button_count] = .{ .x = x, .y = y, .width = width, .height = height };
         g_button_ids[g_button_count] = id;
         g_button_count += 1;
     }
@@ -123,11 +150,27 @@ fn drawButton(label: [*:0]const u8, x: f32, y: f32, id: u64, is_focused: bool) v
     else
         [4]f32{ 0.3, 0.3, 0.4, 1.0 };
 
-    g_cmd_buffer.roundedRect(x, y, button_w, button_h, 8, bg_color) catch {};
+    g_cmd_buffer.roundedRect(x, y, width, height, 8, bg_color) catch {};
+
+    // Measure text for vertical centering
+    var text_size: c.mcore_text_size_t = undefined;
+    const padding_x: f32 = 20;
+    c.mcore_measure_text(ctx, label, 18, width - (padding_x * 2), &text_size);
+
+    // Center text both horizontally and vertically
+    const text_x = x + (width - text_size.width) / 2.0;
+    const text_y = y + (height - text_size.height) / 2.0;
 
     // Draw button text
     const text_color = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
-    g_cmd_buffer.text(label, x + 15, y + 15, 18, 180, text_color) catch {};
+    g_cmd_buffer.text(label, text_x, text_y, 18, text_size.width, text_color) catch {};
+
+    // Debug bounds
+    if (g_debug_bounds) {
+        const debug_color = [4]f32{ 0.0, 1.0, 0.0, 0.9 }; // Green for interactive widgets
+        const rect = layout_mod.Rect{ .x = 0, .y = 0, .width = width, .height = height };
+        drawDebugRect(rect, x, y, debug_color);
+    }
 }
 
 fn measureText(ctx: *c.mcore_context_t, text: []const u8, font_size: f32, max_width: f32) layout_mod.Size {
@@ -139,6 +182,24 @@ fn measureText(ctx: *c.mcore_context_t, text: []const u8, font_size: f32, max_wi
 fn isPointInRect(x: f32, y: f32, rect_x: f32, rect_y: f32, rect_w: f32, rect_h: f32) bool {
     return x >= rect_x and x < rect_x + rect_w and
         y >= rect_y and y < rect_y + rect_h;
+}
+
+fn drawDebugRect(rect: layout_mod.Rect, offset_x: f32, offset_y: f32, color: [4]f32) void {
+    const x = rect.x + offset_x;
+    const y = rect.y + offset_y;
+    const w = rect.width;
+    const h = rect.height;
+    const line_width: f32 = 2;
+
+    // Draw 4 edges as thin rectangles to create an outline
+    // Top edge
+    g_cmd_buffer.roundedRect(x, y, w, line_width, 0, color) catch {};
+    // Bottom edge
+    g_cmd_buffer.roundedRect(x, y + h - line_width, w, line_width, 0, color) catch {};
+    // Left edge
+    g_cmd_buffer.roundedRect(x, y, line_width, h, 0, color) catch {};
+    // Right edge
+    g_cmd_buffer.roundedRect(x + w - line_width, y, line_width, h, 0, color) catch {};
 }
 
 fn drawLabel(text: [*:0]const u8, rect: layout_mod.Rect, offset_x: f32, offset_y: f32, color: [4]f32, font_size: f32) void {
@@ -173,18 +234,63 @@ fn on_frame(t: f64) callconv(.c) void {
         // Reset button tracking for this frame
         g_button_count = 0;
 
-        var y_offset: f32 = 10;
+        // Create a vertical flex container for the entire UI
+        var root_flex = flex_mod.FlexContainer.init(g_allocator, .Vertical);
+        defer root_flex.deinit();
+        root_flex.gap = 20; // More generous gap between sections
+        root_flex.padding = 10;
+
+        // Add sections as children with proper heights
+        // Title section (text + spacing)
+        root_flex.addChild(.{ .width = g_window_width - 20, .height = 40 }, 0) catch {};
+
+        // Demo 1 section (label + content + spacing)
+        root_flex.addChild(.{ .width = g_window_width - 20, .height = 80 }, 0) catch {};
+
+        // Demo 2 section (label + content + spacing)
+        root_flex.addChild(.{ .width = g_window_width - 20, .height = 80 }, 0) catch {};
+
+        // Demo 3 section (label + vertical content + spacing)
+        // 20 (label) + 20 (gap) + 10 (padding) + 3*50 (items) + 2*8 (gaps) + 10 (padding) = 216
+        root_flex.addChild(.{ .width = g_window_width - 20, .height = 216 }, 0) catch {};
+
+        // Interactive buttons section (label + buttons + spacing)
+        root_flex.addChild(.{ .width = g_window_width - 20, .height = 100 }, 0) catch {};
+
+        // Debug button section
+        root_flex.addChild(.{ .width = g_window_width - 20, .height = 70 }, 0) catch {};
+
+        // Text inputs section (label + 2 inputs + spacing)
+        root_flex.addChild(.{ .width = g_window_width - 20, .height = 150 }, 0) catch {};
+
+        // Window size indicator
+        root_flex.addChild(.{ .width = g_window_width - 20, .height = 30 }, 0) catch {};
+
+        // Layout the root flex
+        const root_constraints = layout_mod.BoxConstraints.loose(g_window_width, g_window_height);
+        const sections = root_flex.layout_children(root_constraints) catch &[_]layout_mod.Rect{};
+        defer g_allocator.free(sections);
+
+        // Now render each section at its calculated position
+        var section_idx: usize = 0;
 
         // Title
+        const title_section = sections[section_idx];
+        section_idx += 1;
         const title_color = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
-        g_cmd_buffer.text("Zello Flexbox Demo - Resize the window!", 10, y_offset, 20, g_window_width - 20, title_color) catch {};
-        y_offset += 35;
+        g_cmd_buffer.text("Zello Flexbox Demo - Resize the window!", title_section.x, title_section.y, 20, title_section.width, title_color) catch {};
+        if (g_debug_bounds) {
+            const section_debug_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 }; // Yellow for sections
+            drawDebugRect(title_section, 0, 0, section_debug_color);
+        }
 
         // Demo 1: Horizontal flexbox with fixed sizes
         {
+            const demo1_section = sections[section_idx];
+            section_idx += 1;
             const demo_color = [4]f32{ 0.8, 0.8, 0.8, 1.0 };
-            g_cmd_buffer.text("1. Horizontal (fixed sizes, gap=15, padding=10)", 10, y_offset, 14, g_window_width - 20, demo_color) catch {};
-            y_offset += 20;
+            g_cmd_buffer.text("1. Horizontal (fixed sizes, gap=15, padding=10)", demo1_section.x, demo1_section.y, 14, demo1_section.width, demo_color) catch {};
+            const content_y = demo1_section.y + 20;
 
             var flex = flex_mod.FlexContainer.init(g_allocator, .Horizontal);
             defer flex.deinit();
@@ -210,16 +316,26 @@ fn on_frame(t: f64) callconv(.c) void {
             defer g_allocator.free(rects);
 
             for (rects, 0..) |rect, i| {
-                drawLabel(@ptrCast(labels[i].ptr), rect, 10, y_offset, colors[i], 16);
+                drawLabel(@ptrCast(labels[i].ptr), rect, demo1_section.x, content_y, colors[i], 16);
+                if (g_debug_bounds) {
+                    const debug_color = [4]f32{ 1.0, 0.0, 1.0, 0.8 }; // Magenta outline
+                    drawDebugRect(rect, demo1_section.x, content_y, debug_color);
+                }
             }
-            y_offset += 40;
+
+            if (g_debug_bounds) {
+                const section_debug_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 }; // Yellow for sections
+                drawDebugRect(demo1_section, 0, 0, section_debug_color);
+            }
         }
 
         // Demo 2: Horizontal with flex spacing
         {
+            const demo2_section = sections[section_idx];
+            section_idx += 1;
             const demo_color = [4]f32{ 0.8, 0.8, 0.8, 1.0 };
-            g_cmd_buffer.text("2. Horizontal with flex=1 spacers (stretches to window width)", 10, y_offset, 14, g_window_width - 20, demo_color) catch {};
-            y_offset += 20;
+            g_cmd_buffer.text("2. Horizontal with flex=1 spacers (stretches to window width)", demo2_section.x, demo2_section.y, 14, demo2_section.width, demo_color) catch {};
+            const content_y = demo2_section.y + 20;
 
             var flex = flex_mod.FlexContainer.init(g_allocator, .Horizontal);
             defer flex.deinit();
@@ -255,17 +371,31 @@ fn on_frame(t: f64) callconv(.c) void {
                 // Skip spacers (odd indices)
                 if (i % 2 == 0) {
                     const label_idx = i / 2;
-                    drawLabel(@ptrCast(labels[label_idx].ptr), rect, 10, y_offset, colors[label_idx], 16);
+                    drawLabel(@ptrCast(labels[label_idx].ptr), rect, demo2_section.x, content_y, colors[label_idx], 16);
+                }
+                if (g_debug_bounds) {
+                    // Show all rects including spacers
+                    const debug_color = if (i % 2 == 0)
+                        [4]f32{ 1.0, 0.0, 1.0, 0.8 } // Magenta for content
+                    else
+                        [4]f32{ 0.0, 1.0, 1.0, 0.6 }; // Cyan for spacers
+                    drawDebugRect(rect, demo2_section.x, content_y, debug_color);
                 }
             }
-            y_offset += 40;
+
+            if (g_debug_bounds) {
+                const section_debug_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 }; // Yellow for sections
+                drawDebugRect(demo2_section, 0, 0, section_debug_color);
+            }
         }
 
         // Demo 3: Vertical flexbox
         {
+            const demo3_section = sections[section_idx];
+            section_idx += 1;
             const demo_color = [4]f32{ 0.8, 0.8, 0.8, 1.0 };
-            g_cmd_buffer.text("3. Vertical (gap=8, padding=10)", 10, y_offset, 14, g_window_width - 20, demo_color) catch {};
-            y_offset += 20;
+            g_cmd_buffer.text("3. Vertical (gap=8, padding=10)", demo3_section.x, demo3_section.y, 14, demo3_section.width, demo_color) catch {};
+            const content_y = demo3_section.y + 20;
 
             var flex = flex_mod.FlexContainer.init(g_allocator, .Vertical);
             defer flex.deinit();
@@ -290,53 +420,109 @@ fn on_frame(t: f64) callconv(.c) void {
             defer g_allocator.free(rects);
 
             for (rects, 0..) |rect, i| {
-                drawLabel(@ptrCast(labels[i].ptr), rect, 10, y_offset, colors[i], 16);
+                drawLabel(@ptrCast(labels[i].ptr), rect, demo3_section.x, content_y, colors[i], 16);
+                if (g_debug_bounds) {
+                    const debug_color = [4]f32{ 1.0, 0.0, 1.0, 0.8 }; // Magenta outline
+                    drawDebugRect(rect, demo3_section.x, content_y, debug_color);
+                }
             }
-            y_offset += 100;
+
+            if (g_debug_bounds) {
+                const section_debug_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 }; // Yellow for sections
+                drawDebugRect(demo3_section, 0, 0, section_debug_color);
+            }
         }
 
         // Demo 4: Focusable buttons in horizontal layout
         {
+            const demo4_section = sections[section_idx];
+            section_idx += 1;
             const demo_color = [4]f32{ 0.8, 0.8, 0.8, 1.0 };
-            g_cmd_buffer.text("4. Interactive buttons (Press Tab to cycle focus)", 10, y_offset, 14, g_window_width - 20, demo_color) catch {};
-            y_offset += 25;
+            g_cmd_buffer.text("4. Interactive buttons (Press Tab to cycle focus)", demo4_section.x, demo4_section.y, 14, demo4_section.width, demo_color) catch {};
+            const content_y = demo4_section.y + 25;
 
+            // Measure buttons
+            const btn1_size = measureButton(ctx, "Button 1");
+            const btn2_size = measureButton(ctx, "Button 2");
+            const btn3_size = measureButton(ctx, "Button 3");
+
+            // Create horizontal flex for buttons
+            var buttons_flex = flex_mod.FlexContainer.init(g_allocator, .Horizontal);
+            defer buttons_flex.deinit();
+            buttons_flex.gap = 15;
+            buttons_flex.padding = 0;
+
+            buttons_flex.addChild(.{ .width = btn1_size.width, .height = btn1_size.height }, 0) catch {};
+            buttons_flex.addChild(.{ .width = btn2_size.width, .height = btn2_size.height }, 0) catch {};
+            buttons_flex.addChild(.{ .width = btn3_size.width, .height = btn3_size.height }, 0) catch {};
+
+            const btn_constraints = layout_mod.BoxConstraints.loose(demo4_section.width, 100);
+            const btn_rects = buttons_flex.layout_children(btn_constraints) catch &[_]layout_mod.Rect{};
+            defer g_allocator.free(btn_rects);
+
+            // Draw buttons at calculated positions
             g_ui.pushID("button1") catch {};
             const button1_id = g_ui.getCurrentID();
             g_focus.registerFocusable(button1_id) catch {};
             const is_focused_1 = g_focus.isFocused(button1_id);
-            drawButton("Button 1", 20, y_offset, button1_id, is_focused_1);
+            drawButton(ctx, "Button 1", demo4_section.x + btn_rects[0].x, content_y + btn_rects[0].y, btn_rects[0].width, btn_rects[0].height, button1_id, is_focused_1);
             g_ui.popID();
 
             g_ui.pushID("button2") catch {};
             const button2_id = g_ui.getCurrentID();
             g_focus.registerFocusable(button2_id) catch {};
             const is_focused_2 = g_focus.isFocused(button2_id);
-            drawButton("Button 2", 220, y_offset, button2_id, is_focused_2);
+            drawButton(ctx, "Button 2", demo4_section.x + btn_rects[1].x, content_y + btn_rects[1].y, btn_rects[1].width, btn_rects[1].height, button2_id, is_focused_2);
             g_ui.popID();
 
             g_ui.pushID("button3") catch {};
             const button3_id = g_ui.getCurrentID();
             g_focus.registerFocusable(button3_id) catch {};
             const is_focused_3 = g_focus.isFocused(button3_id);
-            drawButton("Button 3", 420, y_offset, button3_id, is_focused_3);
+            drawButton(ctx, "Button 3", demo4_section.x + btn_rects[2].x, content_y + btn_rects[2].y, btn_rects[2].width, btn_rects[2].height, button3_id, is_focused_3);
             g_ui.popID();
 
-            y_offset += 60;
+            if (g_debug_bounds) {
+                const section_debug_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 }; // Yellow for sections
+                drawDebugRect(demo4_section, 0, 0, section_debug_color);
+            }
+        }
+
+        // Debug toggle button
+        {
+            const debug_section = sections[section_idx];
+            section_idx += 1;
+            g_ui.pushID("debug_button") catch {};
+            g_debug_button_id = g_ui.getCurrentID();
+            g_focus.registerFocusable(g_debug_button_id) catch {};
+            const is_focused_debug = g_focus.isFocused(g_debug_button_id);
+            const label = if (g_debug_bounds) "Debug Bounds: ON" else "Debug Bounds: OFF";
+
+            // Measure button
+            const debug_btn_size = measureButton(ctx, label);
+            drawButton(ctx, label, debug_section.x, debug_section.y, debug_btn_size.width, debug_btn_size.height, g_debug_button_id, is_focused_debug);
+            g_ui.popID();
+
+            if (g_debug_bounds) {
+                const section_debug_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 }; // Yellow for sections
+                drawDebugRect(debug_section, 0, 0, section_debug_color);
+            }
         }
 
         // Demo 5: Text Input Widgets
         {
+            const demo5_section = sections[section_idx];
+            section_idx += 1;
             const demo_color = [4]f32{ 0.8, 0.8, 0.8, 1.0 };
-            g_cmd_buffer.text("5. Text Input (Press Tab to focus, type to edit)", 10, y_offset, 14, g_window_width - 20, demo_color) catch {};
-            y_offset += 25;
+            g_cmd_buffer.text("5. Text Input (Press Tab to focus, type to edit)", demo5_section.x, demo5_section.y, 14, demo5_section.width, demo_color) catch {};
+            const input_y = demo5_section.y + 25;
 
             // Text input 1
             g_ui.pushID("textinput1") catch {};
             g_text_input1_id = g_ui.getCurrentID();
             g_focus.registerFocusable(g_text_input1_id) catch {};
             const is_focused_ti1 = g_focus.isFocused(g_text_input1_id);
-            g_text_input1.render(ctx, &g_cmd_buffer, 20, y_offset, is_focused_ti1);
+            g_text_input1.render(ctx, &g_cmd_buffer, 20, input_y, is_focused_ti1, g_debug_bounds);
             g_ui.popID();
 
             // Text input 2
@@ -344,17 +530,27 @@ fn on_frame(t: f64) callconv(.c) void {
             g_text_input2_id = g_ui.getCurrentID();
             g_focus.registerFocusable(g_text_input2_id) catch {};
             const is_focused_ti2 = g_focus.isFocused(g_text_input2_id);
-            g_text_input2.render(ctx, &g_cmd_buffer, 20, y_offset + 50, is_focused_ti2);
+            g_text_input2.render(ctx, &g_cmd_buffer, 20, input_y + 50, is_focused_ti2, g_debug_bounds);
             g_ui.popID();
 
-            y_offset += 120;
+            if (g_debug_bounds) {
+                const section_debug_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 }; // Yellow for sections
+                drawDebugRect(demo5_section, 0, 0, section_debug_color);
+            }
         }
 
         // Window size indicator
+        const size_section = sections[section_idx];
+        section_idx += 1;
         var size_buf: [64]u8 = undefined;
         const size_info = std.fmt.bufPrintZ(&size_buf, "Window: {d:.0}x{d:.0}", .{ g_window_width, g_window_height }) catch "Window: ???";
         const size_color = [4]f32{ 0.6, 0.6, 0.6, 1.0 };
-        g_cmd_buffer.text(size_info.ptr, 10, y_offset, 12, 400, size_color) catch {};
+        g_cmd_buffer.text(size_info.ptr, size_section.x, size_section.y, 12, 400, size_color) catch {};
+
+        if (g_debug_bounds) {
+            const section_debug_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 }; // Yellow for sections
+            drawDebugRect(size_section, 0, 0, section_debug_color);
+        }
 
         // Submit all draw commands in a single FFI call
         const cmds = g_cmd_buffer.getCommands();

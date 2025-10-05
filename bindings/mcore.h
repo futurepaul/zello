@@ -131,6 +131,13 @@ int mcore_text_input_get(mcore_context_t* ctx, unsigned long long id, char* buf,
 int mcore_text_input_cursor(mcore_context_t* ctx, unsigned long long id);
 void mcore_text_input_set(mcore_context_t* ctx, unsigned long long id, const char* text);
 
+// Text measurement at cursor
+float mcore_measure_text_to_byte_offset(mcore_context_t* ctx, const char* text, float font_size, int byte_offset);
+
+// Clipping
+void mcore_push_clip_rect(mcore_context_t* ctx, float x, float y, float width, float height);
+void mcore_pop_clip(mcore_context_t* ctx);
+
 // Diagnostics
 const char* mcore_last_error(void);
 
