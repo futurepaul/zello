@@ -15,6 +15,13 @@ extern fn mv_set_frame_callback(cb: *const fn (t: f64) callconv(.c) void) void;
 extern fn mv_set_resize_callback(cb: *const fn (w: c_int, h: c_int, scale: f32) callconv(.c) void) void;
 extern fn mv_set_key_callback(cb: *const fn (key: c_int, char_code: c_uint, shift: bool, cmd: bool) callconv(.c) void) void;
 extern fn mv_set_mouse_callback(cb: *const fn (event_type: c_int, x: f32, y: f32) callconv(.c) void) void;
+
+// IME callbacks
+const ImeRect = extern struct { x: f32, y: f32, w: f32, h: f32 };
+extern fn mv_set_ime_commit_callback(cb: *const fn (text: [*:0]const u8) callconv(.c) void) void;
+extern fn mv_set_ime_preedit_callback(cb: *const fn (text: [*:0]const u8, cursor_offset: c_int) callconv(.c) void) void;
+extern fn mv_set_ime_cursor_rect_callback(cb: *const fn () callconv(.c) ImeRect) void;
+
 extern fn mv_app_run() void;
 extern fn mv_clipboard_set_text(text: [*:0]const u8) void;
 extern fn mv_clipboard_get_text(buffer: [*]u8, buffer_len: c_int) c_int;
@@ -39,6 +46,11 @@ var g_text_input2_id: u64 = 0;
 var g_mouse_x: f32 = 0;
 var g_mouse_y: f32 = 0;
 var g_mouse_down: bool = false;
+
+// IME cursor position (updated when rendering focused text input)
+var g_ime_cursor_x: f32 = 10;
+var g_ime_cursor_y: f32 = 550;
+var g_ime_cursor_h: f32 = 20;
 
 // Button tracking for hit testing
 const MAX_BUTTONS = 20;
@@ -357,6 +369,35 @@ fn drawLabel(text: [*:0]const u8, rect: layout_mod.Rect, offset_x: f32, offset_y
     }
 }
 
+// IME callback implementations
+fn on_ime_commit(text: [*:0]const u8) callconv(.c) void {
+    const focused_id = g_focus.focused_id orelse return;
+    if (g_ctx) |ctx| {
+        c.mcore_ime_commit(ctx, focused_id, text);
+    }
+}
+
+fn on_ime_preedit(text: [*:0]const u8, cursor_offset: c_int) callconv(.c) void {
+    const focused_id = g_focus.focused_id orelse return;
+    if (g_ctx) |ctx| {
+        const preedit = c.mcore_ime_preedit_t{
+            .text = text,
+            .cursor_offset = cursor_offset,
+        };
+        c.mcore_ime_set_preedit(ctx, focused_id, &preedit);
+    }
+}
+
+fn on_ime_cursor_rect() callconv(.c) ImeRect {
+    // Return the actual cursor position for IME candidate window
+    return ImeRect{
+        .x = g_ime_cursor_x,
+        .y = g_ime_cursor_y,
+        .w = 2,
+        .h = g_ime_cursor_h,
+    };
+}
+
 fn on_frame(t: f64) callconv(.c) void {
     if (g_ctx) |ctx| {
         c.mcore_begin_frame(ctx, t);
@@ -659,6 +700,17 @@ fn on_frame(t: f64) callconv(.c) void {
             g_focus.registerFocusable(g_text_input1_id) catch {};
             const is_focused_ti1 = g_focus.isFocused(g_text_input1_id);
             g_text_input1.render(ctx, &g_cmd_buffer, g_text_input1_id, 20, input_y, is_focused_ti1, g_debug_bounds);
+
+            // Update IME cursor position if this text input is focused
+            if (is_focused_ti1) {
+                const cursor_pos = c.mcore_text_input_cursor(ctx, g_text_input1_id);
+                const text_len = c.mcore_text_input_get(ctx, g_text_input1_id, &g_text_input1.buffer, 256);
+                const text_ptr: [*:0]const u8 = if (text_len > 0) @ptrCast(g_text_input1.buffer[0..@intCast(text_len)].ptr) else "";
+                const cursor_offset_x = c.mcore_measure_text_to_byte_offset(ctx, text_ptr, 16, cursor_pos);
+                g_ime_cursor_x = 20 + text_input_mod.TextInput.PADDING_X + cursor_offset_x - g_text_input1.scroll_offset;
+                g_ime_cursor_y = input_y;
+                g_ime_cursor_h = g_text_input1.height;
+            }
             g_ui.popID();
 
             // Text input 2
@@ -667,6 +719,17 @@ fn on_frame(t: f64) callconv(.c) void {
             g_focus.registerFocusable(g_text_input2_id) catch {};
             const is_focused_ti2 = g_focus.isFocused(g_text_input2_id);
             g_text_input2.render(ctx, &g_cmd_buffer, g_text_input2_id, 20, input_y + 50, is_focused_ti2, g_debug_bounds);
+
+            // Update IME cursor position if this text input is focused
+            if (is_focused_ti2) {
+                const cursor_pos = c.mcore_text_input_cursor(ctx, g_text_input2_id);
+                const text_len = c.mcore_text_input_get(ctx, g_text_input2_id, &g_text_input2.buffer, 256);
+                const text_ptr: [*:0]const u8 = if (text_len > 0) @ptrCast(g_text_input2.buffer[0..@intCast(text_len)].ptr) else "";
+                const cursor_offset_x = c.mcore_measure_text_to_byte_offset(ctx, text_ptr, 16, cursor_pos);
+                g_ime_cursor_x = 20 + text_input_mod.TextInput.PADDING_X + cursor_offset_x - g_text_input2.scroll_offset;
+                g_ime_cursor_y = input_y + 50;
+                g_ime_cursor_h = g_text_input2.height;
+            }
             g_ui.popID();
 
             if (g_debug_bounds) {
@@ -750,6 +813,9 @@ pub fn main() !void {
     mv_set_resize_callback(on_resize);
     mv_set_key_callback(on_key);
     mv_set_mouse_callback(on_mouse);
+    mv_set_ime_commit_callback(on_ime_commit);
+    mv_set_ime_preedit_callback(on_ime_preedit);
+    mv_set_ime_cursor_rect_callback(on_ime_cursor_rect);
     mv_set_frame_callback(on_frame);
     mv_app_run();
 }

@@ -140,6 +140,24 @@ void mcore_text_input_start_selection(mcore_context_t* ctx, unsigned long long i
 // Text measurement at cursor
 float mcore_measure_text_to_byte_offset(mcore_context_t* ctx, const char* text, float font_size, int byte_offset);
 
+// IME (Input Method Editor) support
+typedef struct {
+  const char* text;
+  int cursor_offset;  // Cursor position within preedit text
+} mcore_ime_preedit_t;
+
+// Set IME preedit (composition) text for a text input
+void mcore_ime_set_preedit(mcore_context_t* ctx, unsigned long long id, const mcore_ime_preedit_t* preedit);
+
+// Commit IME text (finalize composition)
+void mcore_ime_commit(mcore_context_t* ctx, unsigned long long id, const char* text);
+
+// Clear IME preedit state
+void mcore_ime_clear_preedit(mcore_context_t* ctx, unsigned long long id);
+
+// Get IME preedit text if any
+unsigned char mcore_ime_get_preedit(mcore_context_t* ctx, unsigned long long id, char* buf, int buf_len, int* out_cursor_offset);
+
 // Clipping
 void mcore_push_clip_rect(mcore_context_t* ctx, float x, float y, float width, float height);
 void mcore_pop_clip(mcore_context_t* ctx);

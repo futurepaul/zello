@@ -1203,7 +1203,7 @@ pub extern "C" fn mcore_text_input_get_selected_text(
 
     eprintln!("get_selected_text: id={}", id);
 
-    if let Some(state) = guard.text_inputs.get(&id) {
+    if let Some(state) = guard.text_inputs.get(id) {
         eprintln!("  Found state: cursor={}, anchor={:?}, selection={:?}",
             state.cursor, state.selection_anchor, state.selection);
 
@@ -1252,4 +1252,146 @@ pub extern "C" fn mcore_text_input_start_selection(
     state.selection = None;
 
     eprintln!("  cursor={}, anchor={:?}, selection={:?}", state.cursor, state.selection_anchor, state.selection);
+}
+
+// ========== IME (Input Method Editor) Support ==========
+
+#[repr(C)]
+pub struct McoreImePreedit {
+    pub text: *const i8,
+    pub cursor_offset: i32,
+}
+
+/// Set IME preedit (composition) text for a text input
+#[no_mangle]
+pub extern "C" fn mcore_ime_set_preedit(
+    ctx: *mut McoreContext,
+    id: u64,
+    preedit: *const McoreImePreedit,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || preedit.is_null() {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let preedit = unsafe { preedit.as_ref() }.unwrap();
+
+    let text = if preedit.text.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(preedit.text) }
+            .to_str()
+            .unwrap_or("")
+    };
+
+    let mut guard = ctx.0.lock();
+    let state = guard.text_inputs.get_or_create(id);
+
+    if text.is_empty() {
+        // Clear preedit
+        state.ime_composition = None;
+    } else {
+        // Set preedit
+        state.ime_composition = Some(crate::text_input::ImeComposition {
+            text: text.to_string(),
+            cursor_offset: preedit.cursor_offset.max(0) as usize,
+        });
+    }
+}
+
+/// Commit IME text (finalize composition)
+#[no_mangle]
+pub extern "C" fn mcore_ime_commit(
+    ctx: *mut McoreContext,
+    id: u64,
+    text: *const i8,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || text.is_null() {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let text_str = unsafe { CStr::from_ptr(text) }
+        .to_str()
+        .unwrap_or("");
+
+    let mut guard = ctx.0.lock();
+    let state = guard.text_inputs.get_or_create(id);
+
+    // Clear any existing preedit
+    state.ime_composition = None;
+
+    // Insert the committed text
+    state.insert_text(text_str);
+}
+
+/// Clear IME preedit state
+#[no_mangle]
+pub extern "C" fn mcore_ime_clear_preedit(
+    ctx: *mut McoreContext,
+    id: u64,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let mut guard = ctx.0.lock();
+
+    if let Some(state) = guard.text_inputs.get_mut(id) {
+        state.ime_composition = None;
+    }
+}
+
+/// Get IME preedit text if any
+/// Returns 1 if there is preedit text, 0 otherwise
+#[no_mangle]
+pub extern "C" fn mcore_ime_get_preedit(
+    ctx: *mut McoreContext,
+    id: u64,
+    buf: *mut i8,
+    buf_len: i32,
+    out_cursor_offset: *mut i32,
+) -> u8 {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || buf.is_null() || buf_len <= 0 {
+        return 0;
+    }
+
+    let ctx = ctx.unwrap();
+    let guard = ctx.0.lock();
+
+    if let Some(state) = guard.text_inputs.get(id) {
+        if let Some(composition) = &state.ime_composition {
+            let bytes = composition.text.as_bytes();
+            let copy_len = bytes.len().min((buf_len - 1) as usize);
+
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, copy_len);
+                *buf.add(copy_len) = 0; // Null terminate
+
+                if !out_cursor_offset.is_null() {
+                    *out_cursor_offset = composition.cursor_offset as i32;
+                }
+            }
+
+            return 1;
+        }
+    }
+
+    // No preedit text
+    if !buf.is_null() && buf_len > 0 {
+        unsafe {
+            *buf = 0; // Null terminate empty string
+        }
+    }
+
+    0
 }

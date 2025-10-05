@@ -19,8 +19,8 @@ pub const TextInput = struct {
         };
     }
 
-    const PADDING_X: f32 = 10;
-    const PADDING_Y: f32 = 8;
+    pub const PADDING_X: f32 = 10;
+    pub const PADDING_Y: f32 = 8;
 
     /// Render the text input widget
     /// Returns true if the text changed

@@ -1,6 +1,13 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+/// IME composition (preedit) state
+#[derive(Default, Clone)]
+pub struct ImeComposition {
+    pub text: String,
+    pub cursor_offset: usize,  // Cursor position within preedit text
+}
+
 /// State for a single text input widget
 #[derive(Default)]
 pub struct TextInputState {
@@ -8,6 +15,7 @@ pub struct TextInputState {
     pub cursor: usize,  // Byte offset in UTF-8
     pub selection: Option<Range<usize>>,
     pub selection_anchor: Option<usize>,  // Where the selection started (for drag selection)
+    pub ime_composition: Option<ImeComposition>,  // Active IME composition
 }
 
 impl TextInputState {
