@@ -1,13 +1,14 @@
 use parking_lot::Mutex;
-use parley::layout::{Alignment, Layout};
-use parley::style::{FontFamily, FontStack, StyleProperty};
+use parley::layout::{Alignment, AlignmentOptions, Layout, PositionedLayoutItem};
+use parley::style::{FontStack, StyleProperty};
 use parley::{FontContext, LayoutContext};
-use peniko::{kurbo, Brush, Color};
+use peniko::{kurbo, Blob, Brush, Color, FontData};
 use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle};
 use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
 use std::sync::Arc;
-use vello::{AaSupport, Renderer, RendererOptions, Scene};
+use vello::peniko::Fill;
+use vello::{AaConfig, AaSupport, Glyph, RenderParams, Renderer, RendererOptions, Scene};
 
 #[derive(Debug, thiserror::Error)]
 enum EngineError {
@@ -122,6 +123,9 @@ struct Gfx {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
+    blit_pipeline: wgpu::RenderPipeline,
+    blit_bind_group_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
     size: (u32, u32),
     scale: f32,
 }
@@ -154,32 +158,27 @@ impl Gfx {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or_else(|| EngineError::Wgpu("no adapter".into()))?;
+            .map_err(|e| EngineError::Wgpu(format!("{e:?}")))?;
 
         // Request device with higher limits for Vello
         let mut limits = wgpu::Limits::default();
         limits.max_storage_buffers_per_shader_stage = 8;
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("mcore-device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: limits,
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("mcore-device".into()),
+                required_features: wgpu::Features::empty(),
+                required_limits: limits,
+                ..Default::default()
+            })
             .await
             .map_err(|e| EngineError::Wgpu(format!("{e:?}")))?;
 
         let (w, h) = (desc.width_px.max(1) as u32, desc.height_px.max(1) as u32);
         let caps = surface.get_capabilities(&adapter);
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+
+        // Use native format - Vello's render_to_surface handles intermediate texture
+        let format = caps.formats[0];
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -197,13 +196,83 @@ impl Gfx {
         let renderer = Renderer::new(
             &device,
             RendererOptions {
-                surface_format: Some(format),
                 use_cpu: false,
                 antialiasing_support: AaSupport::all(),
-                num_init_threads: None,
+                num_init_threads: std::num::NonZeroUsize::new(1),
+                pipeline_cache: None,
             },
         )
         .map_err(|e| EngineError::Vello(format!("{e:?}")))?;
+
+        // Create blit shader to copy Rgba8Unorm intermediate to surface
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blit".into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("blit.wgsl").into()),
+        });
+
+        let blit_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blit_bgl".into()),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blit_pl".into()),
+            bind_group_layouts: &[&blit_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blit".into()),
+            layout: Some(&blit_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("blit_sampler".into()),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         Ok(Self {
             instance,
@@ -213,6 +282,9 @@ impl Gfx {
             queue,
             config,
             renderer,
+            blit_pipeline,
+            blit_bind_group_layout,
+            sampler,
             size: (w, h),
             scale: desc.scale_factor,
         })
@@ -235,33 +307,98 @@ impl Gfx {
             .get_current_texture()
             .map_err(|e| EngineError::Wgpu(format!("acquire: {e:?}")))?;
 
+        // Create intermediate Rgba8Unorm texture for Vello rendering
+        let intermediate_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("intermediate".into()),
+            size: wgpu::Extent3d {
+                width: self.size.0,
+                height: self.size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let intermediate_view = intermediate_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Render Vello scene to intermediate texture
         self.renderer
-            .render_to_surface(
+            .render_to_texture(
                 &self.device,
                 &self.queue,
                 scene,
-                &frame,
-                &vello::RenderParams {
+                &intermediate_view,
+                &RenderParams {
                     base_color: clear_color,
                     width: self.size.0,
                     height: self.size.1,
-                    antialiasing_method: vello::AaConfig::Msaa16,
+                    antialiasing_method: AaConfig::Msaa16,
                 },
             )
             .map_err(|e| EngineError::Vello(format!("{e:?}")))?;
 
+        // Blit intermediate to surface
+        let surface_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blit_bg".into()),
+            layout: &self.blit_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&intermediate_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("blit_encoder".into()),
+        });
+
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("blit_pass".into()),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                ..Default::default()
+            });
+
+            rpass.set_pipeline(&self.blit_pipeline);
+            rpass.set_bind_group(0, &bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        self.queue.submit([encoder.finish()]);
         frame.present();
         Ok(())
     }
+}
+
+struct TextContext {
+    font_cx: FontContext,
+    layout_cx: LayoutContext<Brush>,
 }
 
 struct Engine {
     gfx: Gfx,
     scene: Scene,
     time_s: f64,
-    font_cx: FontContext,
-    layout_cx: LayoutContext<Brush>,
-    fonts: Vec<Vec<u8>>,
+    text_cx: TextContext,
+    fonts: Vec<(Vec<u8>, FontData)>,
 }
 
 #[repr(C)]
@@ -286,8 +423,10 @@ pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreConte
                         gfx: engine,
                         scene: Scene::new(),
                         time_s: 0.0,
-                        font_cx: FontContext::default(),
-                        layout_cx: LayoutContext::new(),
+                        text_cx: TextContext {
+                            font_cx: FontContext::default(),
+                            layout_cx: LayoutContext::new(),
+                        },
                         fonts: Vec::new(),
                     };
                     Box::into_raw(Box::new(McoreContext(Arc::new(Mutex::new(eng)))))
@@ -349,12 +488,12 @@ pub extern "C" fn mcore_rect_rounded(ctx: *mut McoreContext, rect: *const McoreR
         rect.radius as f64,
     );
 
-    let color = Color::rgba(
-        rect.fill.r as f64,
-        rect.fill.g as f64,
-        rect.fill.b as f64,
-        rect.fill.a as f64,
-    );
+    let color = Color::new([
+        rect.fill.r,
+        rect.fill.g,
+        rect.fill.b,
+        rect.fill.a,
+    ]);
 
     guard.scene.fill(
         vello::peniko::Fill::NonZero,
@@ -372,10 +511,13 @@ pub extern "C" fn mcore_font_register(ctx: *mut McoreContext, blob: *const Mcore
     let mut guard = ctx.0.lock();
 
     let data = unsafe { std::slice::from_raw_parts(blob.data, blob.len) };
-    let font_data = data.to_vec();
+    let font_data_vec = data.to_vec();
 
-    guard.font_cx.collection.register_fonts(font_data.clone());
-    guard.fonts.push(font_data);
+    let font_blob = Blob::new(Arc::new(font_data_vec.clone()));
+    let font_data = FontData::new(font_blob.clone(), 0);
+
+    guard.text_cx.font_cx.collection.register_fonts(font_blob, None);
+    guard.fonts.push((font_data_vec, font_data));
 
     (guard.fonts.len() - 1) as i32
 }
@@ -392,15 +534,27 @@ pub extern "C" fn mcore_text_layout(
     let mut guard = ctx.0.lock();
 
     let text = unsafe { CStr::from_ptr(req.utf8) }.to_str().unwrap_or("");
+    let scale = guard.gfx.scale;
 
-    // Simplified: just return estimated metrics based on font size
-    let char_count = text.chars().count();
-    let est_width = (char_count as f32 * req.font_size_px * 0.6).min(req.wrap_width);
-    let est_lines = ((char_count as f32 * req.font_size_px * 0.6) / req.wrap_width).ceil().max(1.0);
+    // Split borrows using raw pointers to avoid double mutable borrow
+    let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
+    let mut layout: Layout<Brush> = unsafe {
+        let text_cx = &mut *text_cx_ptr;
+        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
+        builder.push_default(StyleProperty::FontSize(req.font_size_px));
+        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
+        builder.build(text)
+    };
 
-    out.advance_w = est_width;
-    out.advance_h = req.font_size_px * est_lines;
-    out.line_count = est_lines as i32;
+    layout.break_all_lines(Some(req.wrap_width));
+    layout.align(None, Alignment::Start, AlignmentOptions::default());
+
+    let width = layout.width();
+    let height = layout.height();
+
+    out.advance_w = width;
+    out.advance_h = height;
+    out.line_count = layout.len() as i32;
 }
 
 #[no_mangle]
@@ -416,46 +570,58 @@ pub extern "C" fn mcore_text_draw(
     let mut guard = ctx.0.lock();
 
     let text = unsafe { CStr::from_ptr(req.utf8) }.to_str().unwrap_or("");
+    let scale = guard.gfx.scale;
 
-    // Simplified text rendering: draw each character as a rectangle
-    // This is a placeholder - full text rendering would use proper font outlines
-    let char_width = req.font_size_px * 0.6;
-    let char_height = req.font_size_px;
+    // Split borrows using raw pointers to avoid double mutable borrow
+    let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
+    let mut layout: Layout<Brush> = unsafe {
+        let text_cx = &mut *text_cx_ptr;
+        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
+        builder.push_default(StyleProperty::FontSize(req.font_size_px));
+        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
+        builder.build(text)
+    };
 
-    let brush = Brush::Solid(Color::rgba(
-        color.r as f64,
-        color.g as f64,
-        color.b as f64,
-        color.a as f64,
-    ));
+    layout.break_all_lines(Some(req.wrap_width));
+    layout.align(None, Alignment::Start, AlignmentOptions::default());
 
-    let mut x_offset = 0.0;
-    let mut y_offset = 0.0;
+    let brush = Brush::Solid(Color::new([color.r, color.g, color.b, color.a]));
 
-    for ch in text.chars() {
-        if ch == '\n' || x_offset + char_width > req.wrap_width {
-            x_offset = 0.0;
-            y_offset += char_height * 1.2;
+    // Use Vello's draw_glyphs to render text properly
+    for line in layout.lines() {
+        for item in line.items() {
+            if let PositionedLayoutItem::GlyphRun(glyph_run) = item {
+                let run = glyph_run.run();
+                let font = run.font();
+                let font_size = run.font_size();
+
+                // Get normalized coords for font variations
+                let normalized_coords: Vec<i16> = run.normalized_coords().to_vec();
+
+                let line_y = line.metrics().baseline;
+
+                let glyphs: Vec<Glyph> = glyph_run
+                    .glyphs()
+                    .map(|g| Glyph {
+                        id: g.id as u32,
+                        x: glyph_run.offset() + g.x,
+                        y: line_y - g.y,
+                    })
+                    .collect();
+
+                if !glyphs.is_empty() {
+                    guard
+                        .scene
+                        .draw_glyphs(font)
+                        .brush(&brush)
+                        .font_size(font_size)
+                        .hint(false)
+                        .transform(kurbo::Affine::translate((x as f64, y as f64)))
+                        .normalized_coords(&normalized_coords)
+                        .draw(Fill::NonZero, glyphs.iter().copied());
+                }
+            }
         }
-
-        if ch != '\n' && !ch.is_whitespace() {
-            let char_rect = kurbo::Rect::new(
-                (x + x_offset) as f64,
-                (y + y_offset) as f64,
-                (x + x_offset + char_width * 0.8) as f64,
-                (y + y_offset + char_height * 0.8) as f64,
-            );
-
-            guard.scene.fill(
-                vello::peniko::Fill::NonZero,
-                kurbo::Affine::IDENTITY,
-                &brush,
-                None,
-                &char_rect,
-            );
-        }
-
-        x_offset += char_width;
     }
 }
 
@@ -466,12 +632,12 @@ pub extern "C" fn mcore_end_frame_present(ctx: *mut McoreContext, clear: McoreRg
 
     // Animate clear color based on time
     let t = guard.time_s as f32;
-    let clear_color = Color::rgba(
-        (clear.r + 0.05 * (t).sin()).clamp(0.0, 1.0) as f64,
-        (clear.g + 0.05 * (t * 1.3).sin()).clamp(0.0, 1.0) as f64,
-        (clear.b + 0.05 * (t * 1.7).sin()).clamp(0.0, 1.0) as f64,
-        clear.a as f64,
-    );
+    let clear_color = Color::new([
+        (clear.r + 0.05 * (t).sin()).clamp(0.0, 1.0),
+        (clear.g + 0.05 * (t * 1.3).sin()).clamp(0.0, 1.0),
+        (clear.b + 0.05 * (t * 1.7).sin()).clamp(0.0, 1.0),
+        clear.a,
+    ]);
 
     // Clone the scene to avoid borrow conflict
     let scene = guard.scene.clone();

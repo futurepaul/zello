@@ -22,7 +22,7 @@ static mv_resize_cb_t g_resize_cb = 0;
         self.layer = [CAMetalLayer layer];
     }
     CAMetalLayer *layer = (CAMetalLayer*)self.layer;
-    layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+    layer.pixelFormat = MTLPixelFormatRGBA8Unorm;
     layer.opaque = YES;
 }
 - (void)layout {

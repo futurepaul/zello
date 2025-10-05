@@ -7,16 +7,16 @@ edition = "2021"
 crate-type = ["staticlib"]
 
 [dependencies]
-wgpu = { version = "0.20", features = ["metal"] }
+wgpu = "26"
 raw-window-handle = "0.6"
 bytemuck = { version = "1.16", features = ["derive"] }
 thiserror = "1"
 parking_lot = "0.12"
 pollster = "0.3"
-vello = "0.2"
-peniko = "0.1"
-parley = "0.1"
-swash = "0.1"
+vello = { version = "0.5.0", git = "https://github.com/linebender/vello", rev = "b7aac65ffc3c4c3bd03ea2ecc313c887ff5e93d0" }
+peniko = "0.5.0"
+parley = { git = "https://github.com/linebender/parley", rev = "38a31c0eab7dc34045b0602e906cc05e9b670692", features = ["accesskit"] }
+skrifa = "0.37"
 
 [build-dependencies]
 cbindgen = "0.26"
