@@ -47,7 +47,7 @@ fn on_frame(t: f64) callconv(.C) void {
 
         // Draw text
         const text_req = c.mcore_text_req_t{
-            .utf8 = "Hello, Zig/Rust!",
+            .utf8 = "justin is gay",
             .wrap_width = 400,
             .font_size_px = 24,
             .font_id = 0,
@@ -72,13 +72,15 @@ pub fn main() !void {
     // Fill surface desc
     g_desc = .{
         .platform = c.MCORE_PLATFORM_MACOS,
-        .u = .{ .macos = .{
-            .ns_view = ns_view,
-            .ca_metal_layer = ca_layer,
-            .scale_factor = 2.0,    // updated by resize callback
-            .width_px = 900 * 2,    // starter values
-            .height_px = 600 * 2,
-        }},
+        .u = .{
+            .macos = .{
+                .ns_view = ns_view,
+                .ca_metal_layer = ca_layer,
+                .scale_factor = 2.0, // updated by resize callback
+                .width_px = 900 * 2, // starter values
+                .height_px = 600 * 2,
+            },
+        },
     };
 
     g_ctx = c.mcore_create(&g_desc) orelse {
