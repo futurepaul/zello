@@ -10,6 +10,8 @@ use std::sync::Arc;
 use vello::peniko::Fill;
 use vello::{AaConfig, AaSupport, Glyph, RenderParams, Renderer, RendererOptions, Scene};
 
+mod text_input;
+
 #[derive(Debug, thiserror::Error)]
 enum EngineError {
     #[error("wgpu error: {0}")]
@@ -423,6 +425,7 @@ struct Engine {
     time_s: f64,
     text_cx: TextContext,
     fonts: Vec<(Vec<u8>, FontData)>,
+    text_inputs: text_input::TextInputManager,
 }
 
 #[repr(C)]
@@ -452,6 +455,7 @@ pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreConte
                             layout_cx: LayoutContext::new(),
                         },
                         fonts: Vec::new(),
+                        text_inputs: text_input::TextInputManager::new(),
                     };
                     Box::into_raw(Box::new(McoreContext(Arc::new(Mutex::new(eng)))))
                 }
@@ -574,10 +578,16 @@ pub extern "C" fn mcore_text_layout(
     layout.align(None, Alignment::Start, AlignmentOptions::default());
 
     let width = layout.width();
-    let height = layout.height();
+
+    // Calculate proper height using line metrics (includes line spacing)
+    let mut total_height = 0.0f32;
+    for line in layout.lines() {
+        let metrics = line.metrics();
+        total_height += metrics.line_height;
+    }
 
     out.advance_w = width;
-    out.advance_h = height;
+    out.advance_h = total_height;
     out.line_count = layout.len() as i32;
 }
 
@@ -610,7 +620,15 @@ pub extern "C" fn mcore_measure_text(
     layout.align(None, Alignment::Start, AlignmentOptions::default());
 
     out.width = layout.width();
-    out.height = layout.height();
+
+    // Calculate proper height using line metrics (includes line spacing)
+    let mut total_height = 0.0f32;
+    for line in layout.lines() {
+        let metrics = line.metrics();
+        total_height += metrics.line_height;
+    }
+
+    out.height = total_height;
 }
 
 #[no_mangle]
@@ -793,4 +811,183 @@ pub extern "C" fn mcore_end_frame_present(ctx: *mut McoreContext, clear: McoreRg
             McoreStatus::Err
         }
     }
+}
+
+// ============================================================================
+// Text Input FFI
+// ============================================================================
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub enum McoreTextEventKind {
+    InsertChar = 0,
+    Backspace = 1,
+    Delete = 2,
+    MoveCursor = 3,
+    SetCursor = 4,
+    InsertText = 5,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub enum McoreCursorDirection {
+    Left = 0,
+    Right = 1,
+    Home = 2,
+    End = 3,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreTextEvent {
+    pub kind: McoreTextEventKind,
+    pub char_code: u32,
+    pub direction: McoreCursorDirection,
+    pub extend_selection: u8,
+    pub cursor_position: i32,
+    pub text_ptr: *const i8,
+}
+
+/// Handle a text input event for a specific widget ID
+/// Returns true if the text changed
+#[no_mangle]
+pub extern "C" fn mcore_text_input_event(
+    ctx: *mut McoreContext,
+    id: u64,
+    event: *const McoreTextEvent,
+) -> u8 {
+    let ctx = unsafe { ctx.as_mut() };
+    let event = unsafe { event.as_ref() };
+
+    if ctx.is_none() || event.is_none() {
+        return 0;
+    }
+
+    let ctx = ctx.unwrap();
+    let event = event.unwrap();
+    let mut guard = ctx.0.lock();
+
+    let state = guard.text_inputs.get_or_create(id);
+
+    match event.kind {
+        McoreTextEventKind::InsertChar => {
+            if let Some(ch) = char::from_u32(event.char_code) {
+                state.insert_char(ch);
+                return 1;
+            }
+        }
+        McoreTextEventKind::Backspace => {
+            state.backspace();
+            return 1;
+        }
+        McoreTextEventKind::Delete => {
+            state.delete();
+            return 1;
+        }
+        McoreTextEventKind::MoveCursor => {
+            match event.direction {
+                McoreCursorDirection::Left => state.move_cursor_left(),
+                McoreCursorDirection::Right => state.move_cursor_right(),
+                McoreCursorDirection::Home => state.move_cursor_home(),
+                McoreCursorDirection::End => state.move_cursor_end(),
+            }
+            return 0;  // Cursor movement doesn't change text
+        }
+        McoreTextEventKind::SetCursor => {
+            state.set_cursor(event.cursor_position.max(0) as usize);
+            return 0;  // Cursor movement doesn't change text
+        }
+        McoreTextEventKind::InsertText => {
+            if !event.text_ptr.is_null() {
+                let text = unsafe { CStr::from_ptr(event.text_ptr) }
+                    .to_str()
+                    .unwrap_or("");
+                state.insert_text(text);
+                return 1;
+            }
+        }
+    }
+
+    0
+}
+
+/// Get the current text content for a widget ID
+/// Returns the number of bytes written (excluding null terminator)
+#[no_mangle]
+pub extern "C" fn mcore_text_input_get(
+    ctx: *mut McoreContext,
+    id: u64,
+    buf: *mut u8,
+    buf_len: i32,
+) -> i32 {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || buf.is_null() || buf_len <= 0 {
+        return 0;
+    }
+
+    let ctx = ctx.unwrap();
+    let guard = ctx.0.lock();
+
+    if let Some(state) = guard.text_inputs.get(id) {
+        let content_bytes = state.content.as_bytes();
+        let copy_len = content_bytes.len().min((buf_len - 1) as usize);
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(content_bytes.as_ptr(), buf, copy_len);
+            *buf.add(copy_len) = 0;  // Null terminate
+        }
+
+        copy_len as i32
+    } else {
+        // No state yet, return empty string
+        unsafe {
+            *buf = 0;
+        }
+        0
+    }
+}
+
+/// Get the cursor position (byte offset) for a widget ID
+#[no_mangle]
+pub extern "C" fn mcore_text_input_cursor(
+    ctx: *mut McoreContext,
+    id: u64,
+) -> i32 {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() {
+        return 0;
+    }
+
+    let ctx = ctx.unwrap();
+    let guard = ctx.0.lock();
+
+    guard.text_inputs
+        .get(id)
+        .map(|s| s.cursor as i32)
+        .unwrap_or(0)
+}
+
+/// Set the text content for a widget ID
+#[no_mangle]
+pub extern "C" fn mcore_text_input_set(
+    ctx: *mut McoreContext,
+    id: u64,
+    text: *const i8,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || text.is_null() {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let text_str = unsafe { CStr::from_ptr(text) }
+        .to_str()
+        .unwrap_or("");
+
+    let mut guard = ctx.0.lock();
+    let state = guard.text_inputs.get_or_create(id);
+    state.set_text(text_str);
 }

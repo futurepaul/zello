@@ -80,6 +80,32 @@ typedef struct {
 
 typedef enum { MCORE_OK = 0, MCORE_ERR = 1 } mcore_status_t;
 
+// Text input events
+typedef enum {
+  TEXT_EVENT_INSERT_CHAR = 0,
+  TEXT_EVENT_BACKSPACE = 1,
+  TEXT_EVENT_DELETE = 2,
+  TEXT_EVENT_MOVE_CURSOR = 3,
+  TEXT_EVENT_SET_CURSOR = 4,
+  TEXT_EVENT_INSERT_TEXT = 5,
+} mcore_text_event_kind_t;
+
+typedef enum {
+  CURSOR_LEFT = 0,
+  CURSOR_RIGHT = 1,
+  CURSOR_HOME = 2,
+  CURSOR_END = 3,
+} mcore_cursor_direction_t;
+
+typedef struct {
+  mcore_text_event_kind_t kind;
+  unsigned int char_code;  // For INSERT_CHAR
+  mcore_cursor_direction_t direction;  // For MOVE_CURSOR
+  unsigned char extend_selection;  // Shift key held
+  int cursor_position;  // For SET_CURSOR
+  const char* text_ptr;  // For INSERT_TEXT
+} mcore_text_event_t;
+
 // Lifecycle
 mcore_context_t* mcore_create(const mcore_surface_desc_t* desc);
 void             mcore_destroy(mcore_context_t* ctx);
@@ -98,6 +124,12 @@ void mcore_measure_text(mcore_context_t* ctx, const char* text, float font_size,
 void mcore_text_draw(mcore_context_t* ctx, const mcore_text_req_t* req, float x, float y, mcore_rgba_t color);
 void mcore_render_commands(mcore_context_t* ctx, const mcore_draw_command_t* commands, int count);
 mcore_status_t mcore_end_frame_present(mcore_context_t* ctx, mcore_rgba_t clear);
+
+// Text input
+unsigned char mcore_text_input_event(mcore_context_t* ctx, unsigned long long id, const mcore_text_event_t* event);
+int mcore_text_input_get(mcore_context_t* ctx, unsigned long long id, char* buf, int buf_len);
+int mcore_text_input_cursor(mcore_context_t* ctx, unsigned long long id);
+void mcore_text_input_set(mcore_context_t* ctx, unsigned long long id, const char* text);
 
 // Diagnostics
 const char* mcore_last_error(void);

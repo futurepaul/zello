@@ -4,11 +4,13 @@
 
 typedef void (*mv_frame_cb_t)(double t);
 typedef void (*mv_resize_cb_t)(int w, int h, float scale);
-typedef void (*mv_key_cb_t)(int key, bool shift);
+typedef void (*mv_key_cb_t)(int key, unsigned int char_code, bool shift);
+typedef void (*mv_mouse_cb_t)(int event_type, float x, float y);
 
 static mv_frame_cb_t g_frame_cb = 0;
 static mv_resize_cb_t g_resize_cb = 0;
 static mv_key_cb_t g_key_cb = 0;
+static mv_mouse_cb_t g_mouse_cb = 0;
 
 @interface MVMetalView : NSView
 @end
@@ -39,8 +41,50 @@ static mv_key_cb_t g_key_cb = 0;
 - (void)keyDown:(NSEvent *)event {
     if (g_key_cb) {
         bool shift = (event.modifierFlags & NSEventModifierFlagShift) != 0;
-        g_key_cb(event.keyCode, shift);
+        unsigned int char_code = 0;
+
+        // Get the character if it's a printable character
+        NSString *chars = [event charactersIgnoringModifiers];
+        if (chars.length > 0) {
+            unichar ch = [chars characterAtIndex:0];
+            // Only pass printable ASCII and common Unicode
+            if (ch >= 32 && ch < 127) {
+                char_code = ch;
+            }
+        }
+
+        g_key_cb(event.keyCode, char_code, shift);
     }
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (g_mouse_cb) {
+        NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+        // Convert points to pixels to match rendering coordinate space
+        CGFloat scale = self.window.backingScaleFactor;
+        g_mouse_cb(0, (float)(p.x * scale), (float)(p.y * scale)); // 0 = mouse down
+    }
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    if (g_mouse_cb) {
+        NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+        CGFloat scale = self.window.backingScaleFactor;
+        g_mouse_cb(1, (float)(p.x * scale), (float)(p.y * scale)); // 1 = mouse up
+    }
+}
+
+- (void)mouseMoved:(NSEvent *)event {
+    if (g_mouse_cb) {
+        NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+        CGFloat scale = self.window.backingScaleFactor;
+        g_mouse_cb(2, (float)(p.x * scale), (float)(p.y * scale)); // 2 = mouse moved
+    }
+}
+
+- (void)mouseDragged:(NSEvent *)event {
+    // Treat drag as move for now
+    [self mouseMoved:event];
 }
 @end
 
@@ -113,6 +157,10 @@ void mv_set_resize_callback(mv_resize_cb_t cb) {
 
 void mv_set_key_callback(mv_key_cb_t cb) {
     g_key_cb = cb;
+}
+
+void mv_set_mouse_callback(mv_mouse_cb_t cb) {
+    g_mouse_cb = cb;
 }
 
 void mv_app_run(void) {

@@ -4,18 +4,18 @@ const focus_mod = @import("ui/focus.zig");
 const layout_mod = @import("ui/layout.zig");
 const flex_mod = @import("ui/flex.zig");
 const commands_mod = @import("ui/commands.zig");
+const text_input_mod = @import("ui/widgets/text_input.zig");
+const c_api = @import("c_api.zig");
+const c = c_api.c;
 
 extern fn mv_app_init(width: c_int, height: c_int, title: [*:0]const u8) ?*anyopaque;
 extern fn mv_get_ns_view() ?*anyopaque;
 extern fn mv_get_metal_layer() ?*anyopaque;
 extern fn mv_set_frame_callback(cb: *const fn (t: f64) callconv(.c) void) void;
 extern fn mv_set_resize_callback(cb: *const fn (w: c_int, h: c_int, scale: f32) callconv(.c) void) void;
-extern fn mv_set_key_callback(cb: *const fn (key: c_int, shift: bool) callconv(.c) void) void;
+extern fn mv_set_key_callback(cb: *const fn (key: c_int, char_code: c_uint, shift: bool) callconv(.c) void) void;
+extern fn mv_set_mouse_callback(cb: *const fn (event_type: c_int, x: f32, y: f32) callconv(.c) void) void;
 extern fn mv_app_run() void;
-
-const c = @cImport({
-    @cInclude("mcore.h");
-});
 
 var g_ctx: ?*c.mcore_context_t = null;
 var g_desc: c.mcore_surface_desc_t = undefined;
@@ -26,9 +26,29 @@ var g_allocator: std.mem.Allocator = undefined;
 var g_window_width: f32 = 900;
 var g_window_height: f32 = 600;
 
-const KEY_TAB = 48; // macOS key code for Tab
+// Text input widgets
+var g_text_input1: text_input_mod.TextInput = undefined;
+var g_text_input2: text_input_mod.TextInput = undefined;
+var g_text_input1_id: u64 = 0;
+var g_text_input2_id: u64 = 0;
 
-fn on_key(key: c_int, shift: bool) callconv(.c) void {
+// Mouse state
+var g_mouse_x: f32 = 0;
+var g_mouse_y: f32 = 0;
+var g_mouse_down: bool = false;
+
+// Button tracking for hit testing
+const MAX_BUTTONS = 20;
+var g_button_bounds: [MAX_BUTTONS]layout_mod.Rect = undefined;
+var g_button_ids: [MAX_BUTTONS]u64 = undefined;
+var g_button_count: usize = 0;
+
+const KEY_TAB = 48; // macOS key code for Tab
+const MOUSE_DOWN: c_int = 0;
+const MOUSE_UP: c_int = 1;
+const MOUSE_MOVED: c_int = 2;
+
+fn on_key(key: c_int, char_code: c_uint, shift: bool) callconv(.c) void {
     if (key == KEY_TAB) {
         if (shift) {
             g_focus.focusPrev();
@@ -36,6 +56,16 @@ fn on_key(key: c_int, shift: bool) callconv(.c) void {
             g_focus.focusNext();
         }
         std.debug.print("Tab pressed, focused_id: {?}\n", .{g_focus.focused_id});
+        return;
+    }
+
+    // Handle text input for focused widget
+    if (g_ctx) |ctx| {
+        if (g_focus.isFocused(g_text_input1_id)) {
+            _ = g_text_input1.handleKey(ctx, key, char_code, shift);
+        } else if (g_focus.isFocused(g_text_input2_id)) {
+            _ = g_text_input2.handleKey(ctx, key, char_code, shift);
+        }
     }
 }
 
@@ -50,20 +80,54 @@ fn on_resize(w: c_int, h: c_int, scale: f32) callconv(.c) void {
     }
 }
 
+fn checkButtonClick() void {
+    for (g_button_bounds[0..g_button_count], g_button_ids[0..g_button_count]) |bounds, id| {
+        if (isPointInRect(g_mouse_x, g_mouse_y, bounds.x, bounds.y, bounds.width, bounds.height)) {
+            std.debug.print("Button clicked! Setting focus to ID {d}\n", .{id});
+            // Set focus to clicked button
+            g_focus.setFocus(id);
+            return;
+        }
+    }
+}
+
+fn on_mouse(event_type: c_int, x: f32, y: f32) callconv(.c) void {
+    // Store mouse position
+    g_mouse_x = x;
+    g_mouse_y = y;
+
+    if (event_type == MOUSE_DOWN) {
+        g_mouse_down = true;
+        // Check if we clicked a button
+        checkButtonClick();
+    } else if (event_type == MOUSE_UP) {
+        g_mouse_down = false;
+    }
+    // MOUSE_MOVED events are silent for now
+}
+
 fn drawButton(label: [*:0]const u8, x: f32, y: f32, id: u64, is_focused: bool) void {
+    const button_w: f32 = 180;
+    const button_h: f32 = 50;
+
+    // Store button bounds for hit testing
+    if (g_button_count < MAX_BUTTONS) {
+        g_button_bounds[g_button_count] = .{ .x = x, .y = y, .width = button_w, .height = button_h };
+        g_button_ids[g_button_count] = id;
+        g_button_count += 1;
+    }
+
     // Draw button background
     const bg_color = if (is_focused)
         [4]f32{ 0.4, 0.5, 0.8, 1.0 }
     else
         [4]f32{ 0.3, 0.3, 0.4, 1.0 };
 
-    g_cmd_buffer.roundedRect(x, y, 180, 50, 8, bg_color) catch {};
+    g_cmd_buffer.roundedRect(x, y, button_w, button_h, 8, bg_color) catch {};
 
     // Draw button text
     const text_color = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
     g_cmd_buffer.text(label, x + 15, y + 15, 18, 180, text_color) catch {};
-
-    _ = id; // ID used for focus tracking, not rendering
 }
 
 fn measureText(ctx: *c.mcore_context_t, text: []const u8, font_size: f32, max_width: f32) layout_mod.Size {
@@ -72,13 +136,28 @@ fn measureText(ctx: *c.mcore_context_t, text: []const u8, font_size: f32, max_wi
     return .{ .width = size.width, .height = size.height };
 }
 
+fn isPointInRect(x: f32, y: f32, rect_x: f32, rect_y: f32, rect_w: f32, rect_h: f32) bool {
+    return x >= rect_x and x < rect_x + rect_w and
+        y >= rect_y and y < rect_y + rect_h;
+}
+
 fn drawLabel(text: [*:0]const u8, rect: layout_mod.Rect, offset_x: f32, offset_y: f32, color: [4]f32, font_size: f32) void {
     // Draw background rect
     const bg_color = [4]f32{ 0.2, 0.2, 0.3, 1.0 };
     g_cmd_buffer.roundedRect(rect.x + offset_x, rect.y + offset_y, rect.width, rect.height, 4, bg_color) catch {};
 
-    // Draw text
-    g_cmd_buffer.text(text, rect.x + offset_x + 4, rect.y + offset_y + 2, font_size, 400, color) catch {};
+    // Measure text for proper vertical centering
+    if (g_ctx) |ctx| {
+        var text_size: c.mcore_text_size_t = undefined;
+        const padding_x: f32 = 8; // Match the padding we added in layout (16/2 = 8)
+        c.mcore_measure_text(ctx, text, font_size, rect.width - (padding_x * 2), &text_size);
+
+        // Center text vertically within the rect
+        const text_y = rect.y + offset_y + (rect.height - text_size.height) / 2.0;
+
+        // Draw text with proper horizontal padding
+        g_cmd_buffer.text(text, rect.x + offset_x + padding_x, text_y, font_size, rect.width - (padding_x * 2), color) catch {};
+    }
 }
 
 fn on_frame(t: f64) callconv(.c) void {
@@ -90,6 +169,9 @@ fn on_frame(t: f64) callconv(.c) void {
 
         // Begin frame for focus system
         g_focus.beginFrame();
+
+        // Reset button tracking for this frame
+        g_button_count = 0;
 
         var y_offset: f32 = 10;
 
@@ -119,7 +201,8 @@ fn on_frame(t: f64) callconv(.c) void {
 
             for (labels) |label| {
                 const size = measureText(ctx, label, 16, 400);
-                flex.addChild(.{ .width = size.width + 8, .height = size.height + 4 }, 0) catch {};
+                // Add generous padding: 16px horizontal, 12px vertical
+                flex.addChild(.{ .width = size.width + 16, .height = size.height + 12 }, 0) catch {};
             }
 
             const constraints = layout_mod.BoxConstraints.loose(g_window_width - 20, 100);
@@ -152,17 +235,17 @@ fn on_frame(t: f64) callconv(.c) void {
 
             // Start label
             const size1 = measureText(ctx, labels[0], 16, 400);
-            flex.addChild(.{ .width = size1.width + 8, .height = size1.height + 4 }, 0) catch {};
+            flex.addChild(.{ .width = size1.width + 16, .height = size1.height + 12 }, 0) catch {};
             // Spacer
             flex.addSpacer(1) catch {};
             // Middle label
             const size2 = measureText(ctx, labels[1], 16, 400);
-            flex.addChild(.{ .width = size2.width + 8, .height = size2.height + 4 }, 0) catch {};
+            flex.addChild(.{ .width = size2.width + 16, .height = size2.height + 12 }, 0) catch {};
             // Spacer
             flex.addSpacer(1) catch {};
             // End label
             const size3 = measureText(ctx, labels[2], 16, 400);
-            flex.addChild(.{ .width = size3.width + 8, .height = size3.height + 4 }, 0) catch {};
+            flex.addChild(.{ .width = size3.width + 16, .height = size3.height + 12 }, 0) catch {};
 
             const constraints = layout_mod.BoxConstraints.loose(g_window_width - 20, 100);
             const rects = flex.layout_children(constraints) catch &[_]layout_mod.Rect{};
@@ -198,7 +281,8 @@ fn on_frame(t: f64) callconv(.c) void {
 
             for (labels) |label| {
                 const size = measureText(ctx, label, 16, 400);
-                flex.addChild(.{ .width = size.width + 8, .height = size.height + 4 }, 0) catch {};
+                // Add generous padding: 16px horizontal, 12px vertical
+                flex.addChild(.{ .width = size.width + 16, .height = size.height + 12 }, 0) catch {};
             }
 
             const constraints = layout_mod.BoxConstraints.loose(200, 200);
@@ -241,6 +325,31 @@ fn on_frame(t: f64) callconv(.c) void {
             y_offset += 60;
         }
 
+        // Demo 5: Text Input Widgets
+        {
+            const demo_color = [4]f32{ 0.8, 0.8, 0.8, 1.0 };
+            g_cmd_buffer.text("5. Text Input (Press Tab to focus, type to edit)", 10, y_offset, 14, g_window_width - 20, demo_color) catch {};
+            y_offset += 25;
+
+            // Text input 1
+            g_ui.pushID("textinput1") catch {};
+            g_text_input1_id = g_ui.getCurrentID();
+            g_focus.registerFocusable(g_text_input1_id) catch {};
+            const is_focused_ti1 = g_focus.isFocused(g_text_input1_id);
+            g_text_input1.render(ctx, &g_cmd_buffer, 20, y_offset, is_focused_ti1);
+            g_ui.popID();
+
+            // Text input 2
+            g_ui.pushID("textinput2") catch {};
+            g_text_input2_id = g_ui.getCurrentID();
+            g_focus.registerFocusable(g_text_input2_id) catch {};
+            const is_focused_ti2 = g_focus.isFocused(g_text_input2_id);
+            g_text_input2.render(ctx, &g_cmd_buffer, 20, y_offset + 50, is_focused_ti2);
+            g_ui.popID();
+
+            y_offset += 120;
+        }
+
         // Window size indicator
         var size_buf: [64]u8 = undefined;
         const size_info = std.fmt.bufPrintZ(&size_buf, "Window: {d:.0}x{d:.0}", .{ g_window_width, g_window_height }) catch "Window: ???";
@@ -277,7 +386,12 @@ pub fn main() !void {
     g_cmd_buffer = commands_mod.CommandBuffer.init(g_allocator, 1000) catch unreachable;
     defer g_cmd_buffer.deinit();
 
-    _ = mv_app_init(900, 600, "Zello - Phase 3: Command Buffer");
+    // Initialize text input widgets
+    // Height should accommodate line height (16px font ~= 20-24px line height) + padding
+    g_text_input1 = text_input_mod.TextInput.init(0, 400, 40); // ID will be set by UI system
+    g_text_input2 = text_input_mod.TextInput.init(0, 400, 40);
+
+    _ = mv_app_init(900, 600, "Zello - Phase 4: Text Input");
     const ns_view = mv_get_ns_view() orelse return error.NoView;
     const ca_layer = mv_get_metal_layer() orelse return error.NoLayer;
 
@@ -303,6 +417,7 @@ pub fn main() !void {
 
     mv_set_resize_callback(on_resize);
     mv_set_key_callback(on_key);
+    mv_set_mouse_callback(on_mouse);
     mv_set_frame_callback(on_frame);
     mv_app_run();
 }
