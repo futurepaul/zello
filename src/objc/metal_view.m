@@ -4,7 +4,7 @@
 
 typedef void (*mv_frame_cb_t)(double t);
 typedef void (*mv_resize_cb_t)(int w, int h, float scale);
-typedef void (*mv_key_cb_t)(int key, unsigned int char_code, bool shift);
+typedef void (*mv_key_cb_t)(int key, unsigned int char_code, bool shift, bool cmd);
 typedef void (*mv_mouse_cb_t)(int event_type, float x, float y);
 
 static mv_frame_cb_t g_frame_cb = 0;
@@ -41,6 +41,7 @@ static mv_mouse_cb_t g_mouse_cb = 0;
 - (void)keyDown:(NSEvent *)event {
     if (g_key_cb) {
         bool shift = (event.modifierFlags & NSEventModifierFlagShift) != 0;
+        bool cmd = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
         unsigned int char_code = 0;
 
         // Get the character if it's a printable character
@@ -53,7 +54,7 @@ static mv_mouse_cb_t g_mouse_cb = 0;
             }
         }
 
-        g_key_cb(event.keyCode, char_code, shift);
+        g_key_cb(event.keyCode, char_code, shift, cmd);
     }
 }
 
@@ -165,4 +166,45 @@ void mv_set_mouse_callback(mv_mouse_cb_t cb) {
 
 void mv_app_run(void) {
     [NSApp run];
+}
+
+// Clipboard functions
+void mv_clipboard_set_text(const char* text) {
+    @autoreleasepool {
+        if (!text) return;
+        NSString *str = [NSString stringWithUTF8String:text];
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        [pasteboard clearContents];
+        [pasteboard setString:str forType:NSPasteboardTypeString];
+    }
+}
+
+int mv_clipboard_get_text(char* buffer, int buffer_len) {
+    @autoreleasepool {
+        if (!buffer || buffer_len <= 0) return 0;
+
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        NSString *str = [pasteboard stringForType:NSPasteboardTypeString];
+
+        if (!str) {
+            buffer[0] = '\0';
+            return 0;
+        }
+
+        const char* utf8 = [str UTF8String];
+        if (!utf8) {
+            buffer[0] = '\0';
+            return 0;
+        }
+
+        int len = (int)strlen(utf8);
+        int copy_len = (len < buffer_len - 1) ? len : (buffer_len - 1);
+        memcpy(buffer, utf8, copy_len);
+        buffer[copy_len] = '\0';
+        return copy_len;
+    }
+}
+
+void mv_app_quit(void) {
+    [NSApp terminate:nil];
 }

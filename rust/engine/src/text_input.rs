@@ -7,6 +7,7 @@ pub struct TextInputState {
     pub content: String,
     pub cursor: usize,  // Byte offset in UTF-8
     pub selection: Option<Range<usize>>,
+    pub selection_anchor: Option<usize>,  // Where the selection started (for drag selection)
 }
 
 impl TextInputState {
@@ -100,6 +101,68 @@ impl TextInputState {
         self.cursor = self.content.len();
         self.selection = None;
     }
+
+    /// Start a selection at the current cursor position
+    pub fn start_selection(&mut self) {
+        self.selection = Some(self.cursor..self.cursor);
+    }
+
+    /// Extend selection to a specific byte position
+    pub fn extend_selection_to(&mut self, position: usize) {
+        let pos = position.min(self.content.len());
+        let pos = ensure_char_boundary(&self.content, pos);
+
+        // Get or set the anchor point (where selection started)
+        let anchor = self.selection_anchor.unwrap_or(self.cursor);
+
+        eprintln!("extend_selection_to: pos={}, anchor={}, cursor={}", pos, anchor, self.cursor);
+
+        // Create selection from anchor to current position
+        let start = anchor.min(pos);
+        let end = anchor.max(pos);
+
+        eprintln!("  selection range: {}..{}", start, end);
+
+        if start < end {
+            self.selection = Some(start..end);
+            eprintln!("  SET selection to {:?}", self.selection);
+        } else {
+            self.selection = None;
+            eprintln!("  CLEARED selection (start >= end)");
+        }
+
+        self.cursor = pos;
+        self.selection_anchor = Some(anchor);
+    }
+
+    /// Set selection to a specific range
+    pub fn set_selection(&mut self, start: usize, end: usize, cursor: usize) {
+        let start = ensure_char_boundary(&self.content, start.min(self.content.len()));
+        let end = ensure_char_boundary(&self.content, end.min(self.content.len()));
+        let cursor = ensure_char_boundary(&self.content, cursor.min(self.content.len()));
+
+        if start < end {
+            self.selection = Some(start..end);
+        } else {
+            self.selection = None;
+        }
+        self.cursor = cursor;
+    }
+
+    /// Clear the selection
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// Get the selected text
+    pub fn get_selection_text(&self) -> Option<&str> {
+        self.selection.as_ref().map(|sel| &self.content[sel.clone()])
+    }
+
+    /// Get selection range
+    pub fn get_selection(&self) -> Option<Range<usize>> {
+        self.selection.clone()
+    }
 }
 
 /// Find the previous character boundary
@@ -124,6 +187,15 @@ fn next_char_boundary(text: &str, cursor: usize) -> usize {
         }
     }
     offset
+}
+
+/// Ensure a position is on a character boundary, moving backward if necessary
+fn ensure_char_boundary(text: &str, position: usize) -> usize {
+    let mut pos = position.min(text.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
 }
 
 /// Manager for all text input states

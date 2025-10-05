@@ -5,15 +5,15 @@ const c_api = @import("../../c_api.zig");
 const c = c_api.c;
 
 pub const TextInput = struct {
-    id: u64,
     buffer: [256]u8 = undefined,
     width: f32,
     height: f32,
     scroll_offset: f32 = 0, // Horizontal scroll for overflow text
+    x: f32 = 0, // Position for mouse hit testing
+    y: f32 = 0,
 
-    pub fn init(id: u64, width: f32, height: f32) TextInput {
+    pub fn init(width: f32, height: f32) TextInput {
         return .{
-            .id = id,
             .width = width,
             .height = height,
         };
@@ -28,13 +28,18 @@ pub const TextInput = struct {
         self: *TextInput,
         ctx: *c.mcore_context_t,
         cmd_buffer: *commands_mod.CommandBuffer,
+        id: u64,
         x: f32,
         y: f32,
         is_focused: bool,
         debug_bounds: bool,
     ) void {
+        // Store position for hit testing
+        self.x = x;
+        self.y = y;
+
         // Get current text from Rust
-        const len = c.mcore_text_input_get(ctx, self.id, &self.buffer, 256);
+        const len = c.mcore_text_input_get(ctx, id, &self.buffer, 256);
         const text = self.buffer[0..@intCast(len)];
 
         // Draw background
@@ -66,7 +71,7 @@ pub const TextInput = struct {
         // Calculate scroll offset to keep cursor visible (do this before rendering)
         const visible_width = self.width - (PADDING_X * 2);
         if (is_focused) {
-            const cursor_pos = c.mcore_text_input_cursor(ctx, self.id);
+            const cursor_pos = c.mcore_text_input_cursor(ctx, id);
             const cursor_offset_x = c.mcore_measure_text_to_byte_offset(ctx, text_ptr, 16, cursor_pos);
             const cursor_right_margin: f32 = 20;
 
@@ -87,6 +92,22 @@ pub const TextInput = struct {
         // Push clip rect to prevent text overflow
         cmd_buffer.pushClip(x, y, self.width, self.height) catch {};
 
+        // Draw selection highlight if there is a selection
+        var sel_start: c_int = 0;
+        var sel_end: c_int = 0;
+        const has_selection = c.mcore_text_input_get_selection(ctx, id, &sel_start, &sel_end);
+        if (has_selection != 0 and sel_start < sel_end) {
+            const sel_start_x = c.mcore_measure_text_to_byte_offset(ctx, text_ptr, 16, sel_start);
+            const sel_end_x = c.mcore_measure_text_to_byte_offset(ctx, text_ptr, 16, sel_end);
+
+            const highlight_x = x + PADDING_X + sel_start_x - self.scroll_offset;
+            const highlight_width = sel_end_x - sel_start_x;
+
+            // Draw selection highlight (semi-transparent blue)
+            const selection_color = [4]f32{ 0.3, 0.5, 0.8, 0.5 };
+            cmd_buffer.roundedRect(highlight_x, text_y, highlight_width, text_size.height, 2, selection_color) catch {};
+        }
+
         // Draw text with scroll offset applied
         const text_color = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
         const text_x = x + PADDING_X - self.scroll_offset;
@@ -94,7 +115,7 @@ pub const TextInput = struct {
 
         // Draw cursor if focused
         if (is_focused) {
-            const cursor_pos = c.mcore_text_input_cursor(ctx, self.id);
+            const cursor_pos = c.mcore_text_input_cursor(ctx, id);
             const cursor_offset_x = c.mcore_measure_text_to_byte_offset(ctx, text_ptr, 16, cursor_pos);
             const cursor_x = x + PADDING_X + cursor_offset_x - self.scroll_offset;
             const cursor_color = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
@@ -124,8 +145,9 @@ pub const TextInput = struct {
 
     /// Handle keyboard input
     pub fn handleKey(
-        self: *TextInput,
+        _: *TextInput,
         ctx: *c.mcore_context_t,
+        id: u64,
         key: c_int,
         char_code: u32,
         shift: bool,
@@ -181,24 +203,100 @@ pub const TextInput = struct {
 
         event.extend_selection = if (shift) 1 else 0;
 
-        const changed = c.mcore_text_input_event(ctx, self.id, &event);
+        const changed = c.mcore_text_input_event(ctx, id, &event);
         return changed != 0;
     }
 
     /// Get the current text content
-    pub fn getText(self: *TextInput, ctx: *c.mcore_context_t) []const u8 {
-        const len = c.mcore_text_input_get(ctx, self.id, &self.buffer, 256);
+    pub fn getText(self: *TextInput, ctx: *c.mcore_context_t, id: u64) []const u8 {
+        const len = c.mcore_text_input_get(ctx, id, &self.buffer, 256);
         return self.buffer[0..@intCast(len)];
     }
 
     /// Set the text content
-    pub fn setText(self: *TextInput, ctx: *c.mcore_context_t, text: []const u8) void {
+    pub fn setText(_: *TextInput, ctx: *c.mcore_context_t, id: u64, text: []const u8) void {
         // Ensure null termination
         var temp_buf: [256]u8 = undefined;
         const len = @min(text.len, 255);
         @memcpy(temp_buf[0..len], text[0..len]);
         temp_buf[len] = 0;
 
-        c.mcore_text_input_set(ctx, self.id, @ptrCast(&temp_buf));
+        c.mcore_text_input_set(ctx, id, @ptrCast(&temp_buf));
+    }
+
+    /// Check if a point is inside this text input
+    pub fn containsPoint(self: *const TextInput, px: f32, py: f32) bool {
+        return px >= self.x and px < self.x + self.width and
+               py >= self.y and py < self.y + self.height;
+    }
+
+    /// Handle mouse down event - position cursor and set anchor for drag selection
+    pub fn handleMouseDown(self: *TextInput, ctx: *c.mcore_context_t, id: u64, mouse_x: f32, _: f32) void {
+        // Convert mouse X to text coordinate
+        const text_local_x = mouse_x - (self.x + PADDING_X) + self.scroll_offset;
+
+        // Get current text
+        const len = c.mcore_text_input_get(ctx, id, &self.buffer, 256);
+        const text = self.buffer[0..@intCast(len)];
+        const text_ptr: [*:0]const u8 = if (text.len > 0) @ptrCast(text.ptr) else "";
+
+        // Binary search to find byte offset at mouse position
+        const byte_offset = findByteOffsetAtX(ctx, text_ptr, 16, text_local_x);
+
+        // Set anchor via FFI by calling a new function
+        c.mcore_text_input_start_selection(ctx, id, @intCast(byte_offset));
+    }
+
+    /// Handle mouse drag event - extend selection
+    pub fn handleMouseDrag(self: *TextInput, ctx: *c.mcore_context_t, id: u64, mouse_x: f32, _: f32) void {
+        // Convert mouse X to text coordinate
+        const text_local_x = mouse_x - (self.x + PADDING_X) + self.scroll_offset;
+
+        // Get current text
+        const len = c.mcore_text_input_get(ctx, id, &self.buffer, 256);
+        const text = self.buffer[0..@intCast(len)];
+        const text_ptr: [*:0]const u8 = if (text.len > 0) @ptrCast(text.ptr) else "";
+
+        // Find byte offset at mouse position
+        const byte_offset = findByteOffsetAtX(ctx, text_ptr, 16, text_local_x);
+
+        // Extend selection to this position
+        c.mcore_text_input_set_cursor_pos(ctx, id, @intCast(byte_offset), 1);
     }
 };
+
+/// Find the byte offset in text closest to a given X coordinate
+fn findByteOffsetAtX(ctx: *c.mcore_context_t, text: [*:0]const u8, font_size: f32, target_x: f32) usize {
+    // Handle empty text or negative X
+    if (target_x <= 0) return 0;
+
+    const text_len = std.mem.len(text);
+    if (text_len == 0) return 0;
+
+    // Binary search for the closest position
+    var left: usize = 0;
+    var right: usize = text_len;
+
+    while (left < right) {
+        const mid = (left + right) / 2;
+        const mid_x = c.mcore_measure_text_to_byte_offset(ctx, text, font_size, @intCast(mid));
+
+        if (mid_x < target_x) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+
+    // Check if the previous position is closer
+    if (left > 0) {
+        const left_x = c.mcore_measure_text_to_byte_offset(ctx, text, font_size, @intCast(left));
+        const prev_x = c.mcore_measure_text_to_byte_offset(ctx, text, font_size, @intCast(left - 1));
+
+        if (@abs(prev_x - target_x) < @abs(left_x - target_x)) {
+            return left - 1;
+        }
+    }
+
+    return left;
+}

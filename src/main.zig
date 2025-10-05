@@ -13,9 +13,12 @@ extern fn mv_get_ns_view() ?*anyopaque;
 extern fn mv_get_metal_layer() ?*anyopaque;
 extern fn mv_set_frame_callback(cb: *const fn (t: f64) callconv(.c) void) void;
 extern fn mv_set_resize_callback(cb: *const fn (w: c_int, h: c_int, scale: f32) callconv(.c) void) void;
-extern fn mv_set_key_callback(cb: *const fn (key: c_int, char_code: c_uint, shift: bool) callconv(.c) void) void;
+extern fn mv_set_key_callback(cb: *const fn (key: c_int, char_code: c_uint, shift: bool, cmd: bool) callconv(.c) void) void;
 extern fn mv_set_mouse_callback(cb: *const fn (event_type: c_int, x: f32, y: f32) callconv(.c) void) void;
 extern fn mv_app_run() void;
+extern fn mv_clipboard_set_text(text: [*:0]const u8) void;
+extern fn mv_clipboard_get_text(buffer: [*]u8, buffer_len: c_int) c_int;
+extern fn mv_app_quit() void;
 
 var g_ctx: ?*c.mcore_context_t = null;
 var g_desc: c.mcore_surface_desc_t = undefined;
@@ -52,7 +55,118 @@ const MOUSE_DOWN: c_int = 0;
 const MOUSE_UP: c_int = 1;
 const MOUSE_MOVED: c_int = 2;
 
-fn on_key(key: c_int, char_code: c_uint, shift: bool) callconv(.c) void {
+fn on_key(key: c_int, char_code: c_uint, shift: bool, cmd: bool) callconv(.c) void {
+    // Debug: print cmd key combinations
+    if (cmd) {
+        std.debug.print("Cmd key: char_code={d} ('{c}'), key={d}\n", .{ char_code, @as(u8, @intCast(char_code)), key });
+    }
+
+    // Handle Cmd+Q to quit
+    if (cmd and char_code == 'q') {
+        mv_app_quit();
+        return;
+    }
+
+    // Handle Cmd+A (select all), Cmd+C (copy), Cmd+X (cut), Cmd+V (paste)
+    if (cmd and g_ctx != null) {
+        const ctx = g_ctx.?;
+        var clipboard_buf: [4096]u8 = undefined;
+
+        if (char_code == 'a') {
+            // Select All
+            if (g_focus.isFocused(g_text_input1_id)) {
+                const len = c.mcore_text_input_get(ctx, g_text_input1_id, &clipboard_buf, 4096);
+                if (len > 0) {
+                    c.mcore_text_input_set_cursor_pos(ctx, g_text_input1_id, 0, 0); // Go to start
+                    c.mcore_text_input_set_cursor_pos(ctx, g_text_input1_id, len, 1); // Select to end
+                }
+            } else if (g_focus.isFocused(g_text_input2_id)) {
+                const len = c.mcore_text_input_get(ctx, g_text_input2_id, &clipboard_buf, 4096);
+                if (len > 0) {
+                    c.mcore_text_input_set_cursor_pos(ctx, g_text_input2_id, 0, 0); // Go to start
+                    c.mcore_text_input_set_cursor_pos(ctx, g_text_input2_id, len, 1); // Select to end
+                }
+            }
+            return;
+        } else if (char_code == 'c') {
+            // Copy
+            std.debug.print("Cmd+C detected!\n", .{});
+            if (g_focus.isFocused(g_text_input1_id)) {
+                const len = c.mcore_text_input_get_selected_text(ctx, g_text_input1_id, &clipboard_buf, 4096);
+                std.debug.print("  Text input 1 selected text length: {d}\n", .{len});
+                if (len > 0) {
+                    clipboard_buf[@intCast(len)] = 0;
+                    mv_clipboard_set_text(@ptrCast(&clipboard_buf));
+                    std.debug.print("  Copied to clipboard: {s}\n", .{clipboard_buf[0..@intCast(len)]});
+                }
+            } else if (g_focus.isFocused(g_text_input2_id)) {
+                const len = c.mcore_text_input_get_selected_text(ctx, g_text_input2_id, &clipboard_buf, 4096);
+                std.debug.print("  Text input 2 selected text length: {d}\n", .{len});
+                if (len > 0) {
+                    clipboard_buf[@intCast(len)] = 0;
+                    mv_clipboard_set_text(@ptrCast(&clipboard_buf));
+                    std.debug.print("  Copied to clipboard: {s}\n", .{clipboard_buf[0..@intCast(len)]});
+                }
+            }
+            return;
+        } else if (char_code == 'x') {
+            // Cut (copy then delete)
+            if (g_focus.isFocused(g_text_input1_id)) {
+                const len = c.mcore_text_input_get_selected_text(ctx, g_text_input1_id, &clipboard_buf, 4096);
+                if (len > 0) {
+                    clipboard_buf[@intCast(len)] = 0;
+                    mv_clipboard_set_text(@ptrCast(&clipboard_buf));
+                    // Delete the selection by sending a backspace event
+                    var event = c.mcore_text_event_t{
+                        .kind = c.TEXT_EVENT_BACKSPACE,
+                        .char_code = 0,
+                        .direction = c.CURSOR_LEFT,
+                        .extend_selection = 0,
+                        .cursor_position = 0,
+                        .text_ptr = null,
+                    };
+                    _ = c.mcore_text_input_event(ctx, g_text_input1_id, &event);
+                }
+            } else if (g_focus.isFocused(g_text_input2_id)) {
+                const len = c.mcore_text_input_get_selected_text(ctx, g_text_input2_id, &clipboard_buf, 4096);
+                if (len > 0) {
+                    clipboard_buf[@intCast(len)] = 0;
+                    mv_clipboard_set_text(@ptrCast(&clipboard_buf));
+                    var event = c.mcore_text_event_t{
+                        .kind = c.TEXT_EVENT_BACKSPACE,
+                        .char_code = 0,
+                        .direction = c.CURSOR_LEFT,
+                        .extend_selection = 0,
+                        .cursor_position = 0,
+                        .text_ptr = null,
+                    };
+                    _ = c.mcore_text_input_event(ctx, g_text_input2_id, &event);
+                }
+            }
+            return;
+        } else if (char_code == 'v') {
+            // Paste
+            const len = mv_clipboard_get_text(&clipboard_buf, 4096);
+            if (len > 0) {
+                clipboard_buf[@intCast(len)] = 0;
+                var event = c.mcore_text_event_t{
+                    .kind = c.TEXT_EVENT_INSERT_TEXT,
+                    .char_code = 0,
+                    .direction = c.CURSOR_LEFT,
+                    .extend_selection = 0,
+                    .cursor_position = 0,
+                    .text_ptr = @ptrCast(&clipboard_buf),
+                };
+                if (g_focus.isFocused(g_text_input1_id)) {
+                    _ = c.mcore_text_input_event(ctx, g_text_input1_id, &event);
+                } else if (g_focus.isFocused(g_text_input2_id)) {
+                    _ = c.mcore_text_input_event(ctx, g_text_input2_id, &event);
+                }
+            }
+            return;
+        }
+    }
+
     if (key == KEY_TAB) {
         if (shift) {
             g_focus.focusPrev();
@@ -66,9 +180,9 @@ fn on_key(key: c_int, char_code: c_uint, shift: bool) callconv(.c) void {
     // Handle text input for focused widget
     if (g_ctx) |ctx| {
         if (g_focus.isFocused(g_text_input1_id)) {
-            _ = g_text_input1.handleKey(ctx, key, char_code, shift);
+            _ = g_text_input1.handleKey(ctx, g_text_input1_id, key, char_code, shift);
         } else if (g_focus.isFocused(g_text_input2_id)) {
-            _ = g_text_input2.handleKey(ctx, key, char_code, shift);
+            _ = g_text_input2.handleKey(ctx, g_text_input2_id, key, char_code, shift);
         }
     }
 }
@@ -109,12 +223,34 @@ fn on_mouse(event_type: c_int, x: f32, y: f32) callconv(.c) void {
 
     if (event_type == MOUSE_DOWN) {
         g_mouse_down = true;
-        // Check if we clicked a button
+
+        // Check if we clicked in a text input first
+        if (g_ctx) |ctx| {
+            if (g_text_input1.containsPoint(x, y)) {
+                g_text_input1.handleMouseDown(ctx, g_text_input1_id, x, y);
+                g_focus.setFocus(g_text_input1_id);
+                return;
+            } else if (g_text_input2.containsPoint(x, y)) {
+                g_text_input2.handleMouseDown(ctx, g_text_input2_id, x, y);
+                g_focus.setFocus(g_text_input2_id);
+                return;
+            }
+        }
+
+        // Otherwise check if we clicked a button
         checkButtonClick();
     } else if (event_type == MOUSE_UP) {
         g_mouse_down = false;
+    } else if (event_type == MOUSE_MOVED and g_mouse_down) {
+        // Handle drag events for text selection
+        if (g_ctx) |ctx| {
+            if (g_focus.isFocused(g_text_input1_id) and g_text_input1.containsPoint(g_mouse_x, g_mouse_y)) {
+                g_text_input1.handleMouseDrag(ctx, g_text_input1_id, x, y);
+            } else if (g_focus.isFocused(g_text_input2_id) and g_text_input2.containsPoint(g_mouse_x, g_mouse_y)) {
+                g_text_input2.handleMouseDrag(ctx, g_text_input2_id, x, y);
+            }
+        }
     }
-    // MOUSE_MOVED events are silent for now
 }
 
 const ButtonSize = struct {
@@ -522,7 +658,7 @@ fn on_frame(t: f64) callconv(.c) void {
             g_text_input1_id = g_ui.getCurrentID();
             g_focus.registerFocusable(g_text_input1_id) catch {};
             const is_focused_ti1 = g_focus.isFocused(g_text_input1_id);
-            g_text_input1.render(ctx, &g_cmd_buffer, 20, input_y, is_focused_ti1, g_debug_bounds);
+            g_text_input1.render(ctx, &g_cmd_buffer, g_text_input1_id, 20, input_y, is_focused_ti1, g_debug_bounds);
             g_ui.popID();
 
             // Text input 2
@@ -530,7 +666,7 @@ fn on_frame(t: f64) callconv(.c) void {
             g_text_input2_id = g_ui.getCurrentID();
             g_focus.registerFocusable(g_text_input2_id) catch {};
             const is_focused_ti2 = g_focus.isFocused(g_text_input2_id);
-            g_text_input2.render(ctx, &g_cmd_buffer, 20, input_y + 50, is_focused_ti2, g_debug_bounds);
+            g_text_input2.render(ctx, &g_cmd_buffer, g_text_input2_id, 20, input_y + 50, is_focused_ti2, g_debug_bounds);
             g_ui.popID();
 
             if (g_debug_bounds) {
@@ -584,8 +720,8 @@ pub fn main() !void {
 
     // Initialize text input widgets
     // Height should accommodate line height (16px font ~= 20-24px line height) + padding
-    g_text_input1 = text_input_mod.TextInput.init(0, 400, 40); // ID will be set by UI system
-    g_text_input2 = text_input_mod.TextInput.init(0, 400, 40);
+    g_text_input1 = text_input_mod.TextInput.init(400, 40);
+    g_text_input2 = text_input_mod.TextInput.init(400, 40);
 
     _ = mv_app_init(900, 600, "Zello - Phase 4: Text Input");
     const ns_view = mv_get_ns_view() orelse return error.NoView;

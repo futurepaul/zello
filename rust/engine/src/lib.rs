@@ -1122,3 +1122,134 @@ pub extern "C" fn mcore_text_input_set(
     let state = guard.text_inputs.get_or_create(id);
     state.set_text(text_str);
 }
+
+/// Get selection range for a text input widget
+/// Returns true if there is a selection, and fills out_start and out_end with the byte offsets
+#[no_mangle]
+pub extern "C" fn mcore_text_input_get_selection(
+    ctx: *mut McoreContext,
+    id: u64,
+    out_start: *mut i32,
+    out_end: *mut i32,
+) -> u8 {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || out_start.is_null() || out_end.is_null() {
+        return 0;
+    }
+
+    let ctx = ctx.unwrap();
+    let guard = ctx.0.lock();
+
+    if let Some(state) = guard.text_inputs.get(id) {
+        if let Some(sel) = state.get_selection() {
+            unsafe {
+                *out_start = sel.start as i32;
+                *out_end = sel.end as i32;
+            }
+            return 1;
+        }
+    }
+
+    0
+}
+
+/// Set cursor position and optionally start a selection
+#[no_mangle]
+pub extern "C" fn mcore_text_input_set_cursor_pos(
+    ctx: *mut McoreContext,
+    id: u64,
+    byte_offset: i32,
+    extend_selection: u8,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || byte_offset < 0 {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let mut guard = ctx.0.lock();
+    let state = guard.text_inputs.get_or_create(id);
+
+    if extend_selection != 0 {
+        // Extend or create selection
+        state.extend_selection_to(byte_offset as usize);
+    } else {
+        // Just move cursor, clear selection AND anchor
+        state.set_cursor(byte_offset as usize);
+        state.clear_selection();
+        state.selection_anchor = None;
+    }
+}
+
+/// Get the selected text (returns length, copies into buffer)
+#[no_mangle]
+pub extern "C" fn mcore_text_input_get_selected_text(
+    ctx: *mut McoreContext,
+    id: u64,
+    buf: *mut i8,
+    buf_len: i32,
+) -> i32 {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || buf.is_null() || buf_len <= 0 {
+        eprintln!("get_selected_text: early return (null check)");
+        return 0;
+    }
+
+    let ctx = ctx.unwrap();
+    let guard = ctx.0.lock();
+
+    eprintln!("get_selected_text: id={}", id);
+
+    if let Some(state) = guard.text_inputs.get(&id) {
+        eprintln!("  Found state: cursor={}, anchor={:?}, selection={:?}",
+            state.cursor, state.selection_anchor, state.selection);
+
+        if let Some(selected) = state.get_selection_text() {
+            let bytes = selected.as_bytes();
+            let copy_len = bytes.len().min((buf_len - 1) as usize);
+            eprintln!("  Copying {} bytes: {:?}", copy_len, selected);
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, copy_len);
+                *buf.add(copy_len) = 0; // Null terminate
+            }
+            return copy_len as i32;
+        } else {
+            eprintln!("  No selection text");
+        }
+    } else {
+        eprintln!("  State not found for id={}", id);
+    }
+
+    0
+}
+
+/// Start a selection at a specific position (for mouse down)
+/// Sets both cursor and anchor to the same position, clearing any existing selection
+#[no_mangle]
+pub extern "C" fn mcore_text_input_start_selection(
+    ctx: *mut McoreContext,
+    id: u64,
+    byte_offset: i32,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || byte_offset < 0 {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let mut guard = ctx.0.lock();
+    let state = guard.text_inputs.get_or_create(id);
+
+    eprintln!("start_selection: id={}, byte_offset={}", id, byte_offset);
+
+    // Set cursor and anchor to the same position, clear selection
+    state.set_cursor(byte_offset as usize);
+    state.selection_anchor = Some(byte_offset as usize);
+    state.selection = None;
+
+    eprintln!("  cursor={}, anchor={:?}, selection={:?}", state.cursor, state.selection_anchor, state.selection);
+}

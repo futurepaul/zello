@@ -131,6 +131,12 @@ int mcore_text_input_get(mcore_context_t* ctx, unsigned long long id, char* buf,
 int mcore_text_input_cursor(mcore_context_t* ctx, unsigned long long id);
 void mcore_text_input_set(mcore_context_t* ctx, unsigned long long id, const char* text);
 
+// Text selection
+unsigned char mcore_text_input_get_selection(mcore_context_t* ctx, unsigned long long id, int* out_start, int* out_end);
+void mcore_text_input_set_cursor_pos(mcore_context_t* ctx, unsigned long long id, int byte_offset, unsigned char extend_selection);
+int mcore_text_input_get_selected_text(mcore_context_t* ctx, unsigned long long id, char* buf, int buf_len);
+void mcore_text_input_start_selection(mcore_context_t* ctx, unsigned long long id, int byte_offset);
+
 // Text measurement at cursor
 float mcore_measure_text_to_byte_offset(mcore_context_t* ctx, const char* text, float font_size, int byte_offset);
 
