@@ -1,0 +1,18 @@
+[package]
+name = "masonry_core_capi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+wgpu = { version = "0.20", features = ["metal"] }
+raw-window-handle = "0.6"
+bytemuck = { version = "1.16", features = ["derive"] }
+thiserror = "1"
+parking_lot = "0.12"
+pollster = "0.3"
+
+[build-dependencies]
+cbindgen = "0.26"
