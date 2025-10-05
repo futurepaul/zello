@@ -587,40 +587,41 @@ pub extern "C" fn mcore_text_draw(
 
     let brush = Brush::Solid(Color::new([color.r, color.g, color.b, color.a]));
 
-    // Use Vello's draw_glyphs to render text properly
+    // Render text using masonry_core's pattern
     for line in layout.lines() {
         for item in line.items() {
-            if let PositionedLayoutItem::GlyphRun(glyph_run) = item {
-                let run = glyph_run.run();
-                let font = run.font();
-                let font_size = run.font_size();
+            let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                continue;
+            };
 
-                // Get normalized coords for font variations
-                let normalized_coords: Vec<i16> = run.normalized_coords().to_vec();
+            let mut glyph_x = glyph_run.offset();
+            let glyph_y = glyph_run.baseline();
+            let run = glyph_run.run();
+            let font = run.font();
+            let font_size = run.font_size();
+            let coords = run.normalized_coords();
 
-                let line_y = line.metrics().baseline;
-
-                let glyphs: Vec<Glyph> = glyph_run
-                    .glyphs()
-                    .map(|g| Glyph {
-                        id: g.id as u32,
-                        x: glyph_run.offset() + g.x,
-                        y: line_y - g.y,
-                    })
-                    .collect();
-
-                if !glyphs.is_empty() {
-                    guard
-                        .scene
-                        .draw_glyphs(font)
-                        .brush(&brush)
-                        .font_size(font_size)
-                        .hint(false)
-                        .transform(kurbo::Affine::translate((x as f64, y as f64)))
-                        .normalized_coords(&normalized_coords)
-                        .draw(Fill::NonZero, glyphs.iter().copied());
-                }
-            }
+            guard
+                .scene
+                .draw_glyphs(font)
+                .brush(&brush)
+                .hint(false)
+                .transform(kurbo::Affine::translate((x as f64, y as f64)))
+                .font_size(font_size)
+                .normalized_coords(coords)
+                .draw(
+                    Fill::NonZero,
+                    glyph_run.glyphs().map(|glyph| {
+                        let gx = glyph_x + glyph.x;
+                        let gy = glyph_y - glyph.y;
+                        glyph_x += glyph.advance;
+                        vello::Glyph {
+                            id: glyph.id,
+                            x: gx,
+                            y: gy,
+                        }
+                    }),
+                );
         }
     }
 }

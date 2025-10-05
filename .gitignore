@@ -5,3 +5,7 @@ zig-out/
 # Rust build artifacts
 rust/engine/target/
 rust/engine/Cargo.lock
+
+# sample stuff
+references/
+
