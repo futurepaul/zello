@@ -11,6 +11,7 @@ use vello::peniko::Fill;
 use vello::{AaConfig, AaSupport, Glyph, RenderParams, Renderer, RendererOptions, Scene};
 
 mod text_input;
+mod a11y;
 
 #[derive(Debug, thiserror::Error)]
 enum EngineError {
@@ -426,6 +427,7 @@ struct Engine {
     text_cx: TextContext,
     fonts: Vec<(Vec<u8>, FontData)>,
     text_inputs: text_input::TextInputManager,
+    a11y: Option<a11y::AccessibilityAdapter>,
 }
 
 #[repr(C)]
@@ -456,6 +458,7 @@ pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreConte
                         },
                         fonts: Vec::new(),
                         text_inputs: text_input::TextInputManager::new(),
+                        a11y: None,
                     };
                     Box::into_raw(Box::new(McoreContext(Arc::new(Mutex::new(eng)))))
                 }
@@ -1394,4 +1397,172 @@ pub extern "C" fn mcore_ime_get_preedit(
     }
 
     0
+}
+
+// ============================================================================
+// Accessibility (AccessKit) FFI
+// ============================================================================
+
+/// Initialize the accessibility adapter for a given NSView
+/// This should be called after creating the window but before showing it
+///
+/// # Safety
+/// ns_view must be a valid pointer to an NSView instance
+#[no_mangle]
+pub extern "C" fn mcore_a11y_init(
+    ctx: *mut McoreContext,
+    ns_view: *mut c_void,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || ns_view.is_null() {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let mut guard = ctx.0.lock();
+
+    // Create the accessibility adapter
+    unsafe {
+        guard.a11y = Some(a11y::AccessibilityAdapter::new(ns_view));
+    }
+}
+
+/// Represents a single accessibility node sent from Zig
+#[repr(C)]
+pub struct McoreA11yNode {
+    pub id: u64,
+    pub role: u8,  // Maps to accesskit::Role
+    pub label: *const i8,
+    pub bounds: McoreRect,
+    pub actions: u32,  // Bitfield of supported actions
+    pub children: *const u64,
+    pub children_count: i32,
+    pub value: *const i8,
+    pub text_selection_start: i32,
+    pub text_selection_end: i32,
+}
+
+#[repr(C)]
+pub struct McoreRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Update the accessibility tree
+/// Zig builds an array of nodes and sends them all at once
+#[no_mangle]
+pub extern "C" fn mcore_a11y_update(
+    ctx: *mut McoreContext,
+    nodes: *const McoreA11yNode,
+    node_count: i32,
+    root_id: u64,
+    focus_id: u64,
+) {
+    use accesskit::{Action, NodeId, Node, Role, Rect, Tree, TreeUpdate};
+
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || nodes.is_null() || node_count <= 0 {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let guard = ctx.0.lock();
+
+    // Convert C nodes to AccessKit nodes
+    let nodes_slice = unsafe { std::slice::from_raw_parts(nodes, node_count as usize) };
+
+    let mut ak_nodes = Vec::new();
+
+    for c_node in nodes_slice {
+        let node_id = NodeId(c_node.id);
+
+        // Map role
+        let role = match c_node.role {
+            0 => Role::Window,
+            1 => Role::Button,
+            2 => Role::TextInput,
+            3 => Role::Label,
+            4 => Role::Group,
+            _ => Role::Unknown,
+        };
+
+        let mut node = Node::new(role);
+
+        // Set label
+        if !c_node.label.is_null() {
+            let label = unsafe { CStr::from_ptr(c_node.label) }
+                .to_str()
+                .unwrap_or("");
+            if !label.is_empty() {
+                node.set_label(label.to_string());
+            }
+        }
+
+        // Set value (for text inputs)
+        if !c_node.value.is_null() {
+            let value = unsafe { CStr::from_ptr(c_node.value) }
+                .to_str()
+                .unwrap_or("");
+            if !value.is_empty() {
+                node.set_value(value.to_string());
+            }
+        }
+
+        // Set bounds
+        node.set_bounds(Rect {
+            x0: c_node.bounds.x as f64,
+            y0: c_node.bounds.y as f64,
+            x1: (c_node.bounds.x + c_node.bounds.width) as f64,
+            y1: (c_node.bounds.y + c_node.bounds.height) as f64,
+        });
+
+        // Set children
+        if !c_node.children.is_null() && c_node.children_count > 0 {
+            let children = unsafe {
+                std::slice::from_raw_parts(c_node.children, c_node.children_count as usize)
+            };
+            let child_ids: Vec<NodeId> = children.iter().map(|&id| NodeId(id)).collect();
+            node.set_children(child_ids);
+        }
+
+        // Set actions (bitfield)
+        if c_node.actions & 0x01 != 0 {  // Focus
+            node.add_action(Action::Focus);
+        }
+        if c_node.actions & 0x02 != 0 {  // Click
+            node.add_action(Action::Click);
+        }
+
+        // TODO: Set text selection for text inputs
+        // Text selection in AccessKit is more complex than just byte offsets
+        // It requires TextPosition with node IDs and character indices
+        // We'll implement this properly later when we have text run nodes
+        let _ = (c_node.text_selection_start, c_node.text_selection_end);
+
+        ak_nodes.push((node_id, node));
+    }
+
+    // Build the tree update
+    let tree_update = TreeUpdate {
+        nodes: ak_nodes,
+        tree: Some(Tree::new(NodeId(root_id))),
+        focus: NodeId(focus_id),
+    };
+
+    // Send to adapter
+    if let Some(a11y) = &guard.a11y {
+        a11y.update_tree(tree_update);
+    }
+}
+
+/// Set callback for accessibility actions (focus, click, etc.)
+#[no_mangle]
+pub extern "C" fn mcore_a11y_set_action_callback(
+    callback: extern "C" fn(u64, u8),
+) {
+    a11y::set_action_callback(callback);
 }

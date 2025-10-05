@@ -17,6 +17,8 @@ vello = { version = "0.5.0", git = "https://github.com/linebender/vello", rev = 
 peniko = "0.5.0"
 parley = { git = "https://github.com/linebender/parley", rev = "38a31c0eab7dc34045b0602e906cc05e9b670692", features = ["accesskit"] }
 skrifa = "0.37"
+accesskit = "0.20"
+accesskit_macos = "0.21"
 
 [build-dependencies]
 cbindgen = "0.26"

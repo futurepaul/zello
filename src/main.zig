@@ -5,6 +5,7 @@ const layout_mod = @import("ui/layout.zig");
 const flex_mod = @import("ui/flex.zig");
 const commands_mod = @import("ui/commands.zig");
 const text_input_mod = @import("ui/widgets/text_input.zig");
+const a11y_mod = @import("ui/a11y.zig");
 const c_api = @import("c_api.zig");
 const c = c_api.c;
 
@@ -398,6 +399,151 @@ fn on_ime_cursor_rect() callconv(.c) ImeRect {
     };
 }
 
+fn on_a11y_action(widget_id: u64, action_code: u8) callconv(.c) void {
+    std.debug.print("A11y action: widget_id={}, action={}\n", .{ widget_id, action_code });
+
+    // Action codes: 0 = Focus, 1 = Click
+    switch (action_code) {
+        0 => {
+            // Focus action
+            std.debug.print("Setting focus to widget {}\n", .{widget_id});
+            g_focus.setFocus(widget_id);
+        },
+        1 => {
+            // Click action
+            std.debug.print("Click on widget {}\n", .{widget_id});
+            // Check if it's a button by looking in g_button_ids
+            for (g_button_ids[0..g_button_count], 0..) |bid, i| {
+                if (bid == widget_id) {
+                    std.debug.print("Button {} clicked via VoiceOver!\n", .{i + 1});
+                    // Handle button click
+                    if (widget_id == g_debug_button_id) {
+                        g_debug_bounds = !g_debug_bounds;
+                    }
+                    // Set focus too
+                    g_focus.setFocus(widget_id);
+                    break;
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+fn buildA11yTree(ctx: *c.mcore_context_t) !void {
+    const WINDOW_ID: u64 = 1;
+    // Use actual widget IDs from the focus system
+    const TEXT_INPUT_1_ID: u64 = g_text_input1_id;
+    const TEXT_INPUT_2_ID: u64 = g_text_input2_id;
+    // Button IDs from g_button_ids array (set during rendering)
+    const BUTTON_1_ID: u64 = if (g_button_count > 0) g_button_ids[0] else 100;
+    const BUTTON_2_ID: u64 = if (g_button_count > 1) g_button_ids[1] else 101;
+    const BUTTON_3_ID: u64 = if (g_button_count > 2) g_button_ids[2] else 102;
+    const DEBUG_BUTTON_ID: u64 = if (g_button_count > 3) g_button_ids[3] else g_debug_button_id;
+
+    var tree = a11y_mod.TreeBuilder.init(g_allocator, WINDOW_ID);
+    defer tree.deinit();
+
+    // Root window node
+    var window_node = a11y_mod.Node.init(
+        g_allocator,
+        WINDOW_ID,
+        .Window,
+        .{ .x = 0, .y = 0, .width = g_window_width, .height = g_window_height },
+    );
+    window_node.setLabel("Zello - Phase 4: Text Input");
+
+    // Add buttons as children
+    try window_node.addChild(BUTTON_1_ID);
+    try window_node.addChild(BUTTON_2_ID);
+    try window_node.addChild(BUTTON_3_ID);
+    try window_node.addChild(DEBUG_BUTTON_ID);
+    try window_node.addChild(TEXT_INPUT_1_ID);
+    try window_node.addChild(TEXT_INPUT_2_ID);
+
+    try tree.addNode(window_node);
+
+    // Button 1
+    if (g_button_count > 0) {
+        const b = g_button_bounds[0];
+        var btn1 = a11y_mod.Node.init(g_allocator, BUTTON_1_ID, .Button, .{ .x = b.x, .y = b.y, .width = b.width, .height = b.height });
+        btn1.setLabel("Button 1");
+        btn1.addAction(a11y_mod.Actions.Focus);
+        btn1.addAction(a11y_mod.Actions.Click);
+        try tree.addNode(btn1);
+    }
+
+    // Button 2
+    if (g_button_count > 1) {
+        const b = g_button_bounds[1];
+        var btn2 = a11y_mod.Node.init(g_allocator, BUTTON_2_ID, .Button, .{ .x = b.x, .y = b.y, .width = b.width, .height = b.height });
+        btn2.setLabel("Button 2");
+        btn2.addAction(a11y_mod.Actions.Focus);
+        btn2.addAction(a11y_mod.Actions.Click);
+        try tree.addNode(btn2);
+    }
+
+    // Button 3
+    if (g_button_count > 2) {
+        const b = g_button_bounds[2];
+        var btn3 = a11y_mod.Node.init(g_allocator, BUTTON_3_ID, .Button, .{ .x = b.x, .y = b.y, .width = b.width, .height = b.height });
+        btn3.setLabel("Button 3");
+        btn3.addAction(a11y_mod.Actions.Focus);
+        btn3.addAction(a11y_mod.Actions.Click);
+        try tree.addNode(btn3);
+    }
+
+    // Debug button
+    if (g_button_count > 3) {
+        const b = g_button_bounds[3];
+        var debug_btn = a11y_mod.Node.init(g_allocator, DEBUG_BUTTON_ID, .Button, .{ .x = b.x, .y = b.y, .width = b.width, .height = b.height });
+        if (g_debug_bounds) {
+            debug_btn.setLabel("Debug Bounds: ON");
+        } else {
+            debug_btn.setLabel("Debug Bounds: OFF");
+        }
+        debug_btn.addAction(a11y_mod.Actions.Focus);
+        debug_btn.addAction(a11y_mod.Actions.Click);
+        try tree.addNode(debug_btn);
+    }
+
+    // Text Input 1
+    var ti1 = a11y_mod.Node.init(g_allocator, TEXT_INPUT_1_ID, .TextInput, .{ .x = g_text_input1.x, .y = g_text_input1.y, .width = g_text_input1.width, .height = g_text_input1.height });
+    ti1.setLabel("Text Input 1");
+
+    // Get current text value
+    var text_buf: [256]u8 = undefined;
+    const len = c.mcore_text_input_get(ctx, g_text_input1_id, &text_buf, 256);
+    if (len > 0) {
+        ti1.setValue(text_buf[0..@intCast(len)]);
+    }
+
+    ti1.addAction(a11y_mod.Actions.Focus);
+    try tree.addNode(ti1);
+
+    // Text Input 2
+    var ti2 = a11y_mod.Node.init(g_allocator, TEXT_INPUT_2_ID, .TextInput, .{ .x = g_text_input2.x, .y = g_text_input2.y, .width = g_text_input2.width, .height = g_text_input2.height });
+    ti2.setLabel("Text Input 2");
+
+    const len2 = c.mcore_text_input_get(ctx, g_text_input2_id, &text_buf, 256);
+    if (len2 > 0) {
+        ti2.setValue(text_buf[0..@intCast(len2)]);
+    }
+
+    ti2.addAction(a11y_mod.Actions.Focus);
+    try tree.addNode(ti2);
+
+    // Set focus
+    if (g_focus.focused_id) |fid| {
+        tree.setFocus(fid);
+    } else {
+        tree.setFocus(WINDOW_ID);
+    }
+
+    // Send to accessibility system
+    try tree.update(ctx);
+}
+
 fn on_frame(t: f64) callconv(.c) void {
     if (g_ctx) |ctx| {
         c.mcore_begin_frame(ctx, t);
@@ -755,6 +901,11 @@ fn on_frame(t: f64) callconv(.c) void {
         const cmds = g_cmd_buffer.getCommands();
         c.mcore_render_commands(ctx, @ptrCast(cmds.ptr), @intCast(cmds.count));
 
+        // Build and update accessibility tree
+        buildA11yTree(ctx) catch |err| {
+            std.debug.print("Failed to build a11y tree: {}\n", .{err});
+        };
+
         const clear = c.mcore_rgba_t{ .r = 0.15, .g = 0.15, .b = 0.20, .a = 1.0 };
         const st = c.mcore_end_frame_present(ctx, clear);
         if (st != c.MCORE_OK) {
@@ -809,6 +960,10 @@ pub fn main() !void {
         if (err != null) std.debug.print("create error: {s}\n", .{std.mem.span(err)});
         return error.EngineCreateFailed;
     };
+
+    // Initialize accessibility
+    a11y_mod.init(g_ctx, ns_view);
+    c.mcore_a11y_set_action_callback(on_a11y_action);
 
     mv_set_resize_callback(on_resize);
     mv_set_key_callback(on_key);

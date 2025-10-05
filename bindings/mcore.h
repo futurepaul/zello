@@ -165,6 +165,47 @@ void mcore_pop_clip(mcore_context_t* ctx);
 // Diagnostics
 const char* mcore_last_error(void);
 
+// ============================================================================
+// Accessibility (AccessKit)
+// ============================================================================
+
+typedef struct {
+    float x;
+    float y;
+    float width;
+    float height;
+} mcore_rect_t;
+
+typedef struct {
+    unsigned long long id;
+    unsigned char role;  // Maps to AccessKit Role enum
+    const char* label;
+    mcore_rect_t bounds;
+    unsigned int actions;  // Bitfield of supported actions
+    const unsigned long long* children;
+    int children_count;
+    const char* value;
+    int text_selection_start;
+    int text_selection_end;
+} mcore_a11y_node_t;
+
+// Initialize accessibility for a given NSView
+void mcore_a11y_init(mcore_context_t* ctx, void* ns_view);
+
+// Update the accessibility tree
+void mcore_a11y_update(
+    mcore_context_t* ctx,
+    const mcore_a11y_node_t* nodes,
+    int node_count,
+    unsigned long long root_id,
+    unsigned long long focus_id
+);
+
+// Set callback for accessibility actions
+// Callback signature: void callback(unsigned long long widget_id, unsigned char action_code)
+// Action codes: 0 = Focus, 1 = Click
+void mcore_a11y_set_action_callback(void (*callback)(unsigned long long, unsigned char));
+
 #ifdef __cplusplus
 }
 #endif
