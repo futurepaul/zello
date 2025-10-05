@@ -4,9 +4,11 @@
 
 typedef void (*mv_frame_cb_t)(double t);
 typedef void (*mv_resize_cb_t)(int w, int h, float scale);
+typedef void (*mv_key_cb_t)(int key, bool shift);
 
 static mv_frame_cb_t g_frame_cb = 0;
 static mv_resize_cb_t g_resize_cb = 0;
+static mv_key_cb_t g_key_cb = 0;
 
 @interface MVMetalView : NSView
 @end
@@ -15,6 +17,7 @@ static mv_resize_cb_t g_resize_cb = 0;
 + (Class)layerClass { return [CAMetalLayer class]; }
 - (BOOL)wantsUpdateLayer { return YES; }
 - (BOOL)isFlipped { return YES; }
+- (BOOL)acceptsFirstResponder { return YES; }
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
     self.wantsLayer = YES;
@@ -31,6 +34,12 @@ static mv_resize_cb_t g_resize_cb = 0;
         NSRect b = self.bounds;
         CGFloat scale = self.window.backingScaleFactor;
         g_resize_cb((int)(b.size.width * scale), (int)(b.size.height * scale), (float)scale);
+    }
+}
+- (void)keyDown:(NSEvent *)event {
+    if (g_key_cb) {
+        bool shift = (event.modifierFlags & NSEventModifierFlagShift) != 0;
+        g_key_cb(event.keyCode, shift);
     }
 }
 @end
@@ -100,6 +109,10 @@ void mv_set_frame_callback(mv_frame_cb_t cb) {
 
 void mv_set_resize_callback(mv_resize_cb_t cb) {
     g_resize_cb = cb;
+}
+
+void mv_set_key_callback(mv_key_cb_t cb) {
+    g_key_cb = cb;
 }
 
 void mv_app_run(void) {

@@ -115,6 +115,30 @@ pub struct McoreTextMetrics {
     pub line_count: i32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreTextSize {
+    pub width: f32,
+    pub height: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreDrawCommand {
+    pub kind: u8,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub radius: f32,
+    pub color: [f32; 4],
+    pub text_ptr: *const i8,
+    pub font_size: f32,
+    pub wrap_width: f32,
+    pub font_id: i32,
+    pub _padding: [u8; 12],
+}
+
 struct Gfx {
     instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
@@ -558,6 +582,38 @@ pub extern "C" fn mcore_text_layout(
 }
 
 #[no_mangle]
+pub extern "C" fn mcore_measure_text(
+    ctx: *mut McoreContext,
+    text: *const i8,
+    font_size: f32,
+    max_width: f32,
+    out: *mut McoreTextSize,
+) {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let text = unsafe { CStr::from_ptr(text) }.to_str().unwrap_or("");
+    let out = unsafe { out.as_mut() }.unwrap();
+    let mut guard = ctx.0.lock();
+
+    let scale = guard.gfx.scale;
+
+    // Split borrows using raw pointers to avoid double mutable borrow
+    let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
+    let mut layout: Layout<Brush> = unsafe {
+        let text_cx = &mut *text_cx_ptr;
+        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
+        builder.push_default(StyleProperty::FontSize(font_size));
+        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
+        builder.build(text)
+    };
+
+    layout.break_all_lines(Some(max_width));
+    layout.align(None, Alignment::Start, AlignmentOptions::default());
+
+    out.width = layout.width();
+    out.height = layout.height();
+}
+
+#[no_mangle]
 pub extern "C" fn mcore_text_draw(
     ctx: *mut McoreContext,
     req: *const McoreTextReq,
@@ -622,6 +678,93 @@ pub extern "C" fn mcore_text_draw(
                         }
                     }),
                 );
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mcore_render_commands(
+    ctx: *mut McoreContext,
+    commands: *const McoreDrawCommand,
+    count: i32,
+) {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let commands = unsafe { std::slice::from_raw_parts(commands, count as usize) };
+    let mut guard = ctx.0.lock();
+
+    for cmd in commands {
+        match cmd.kind {
+            0 => {
+                // RoundedRect
+                let shape = kurbo::RoundedRect::new(
+                    cmd.x as f64,
+                    cmd.y as f64,
+                    (cmd.x + cmd.width) as f64,
+                    (cmd.y + cmd.height) as f64,
+                    cmd.radius as f64,
+                );
+                let color = Color::new([cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]]);
+                guard.scene.fill(Fill::NonZero, kurbo::Affine::IDENTITY, color, None, &shape);
+            }
+            1 => {
+                // Text
+                let text = unsafe { CStr::from_ptr(cmd.text_ptr) }.to_str().unwrap_or("");
+                let scale = guard.gfx.scale;
+
+                // Split borrows using raw pointers
+                let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
+                let mut layout: Layout<Brush> = unsafe {
+                    let text_cx = &mut *text_cx_ptr;
+                    let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
+                    builder.push_default(StyleProperty::FontSize(cmd.font_size));
+                    builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
+                    builder.build(text)
+                };
+
+                layout.break_all_lines(Some(cmd.wrap_width));
+                layout.align(None, Alignment::Start, AlignmentOptions::default());
+
+                let brush = Brush::Solid(Color::new([cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]]));
+
+                // Render text
+                for line in layout.lines() {
+                    for item in line.items() {
+                        let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                            continue;
+                        };
+
+                        let mut glyph_x = glyph_run.offset();
+                        let glyph_y = glyph_run.baseline();
+                        let run = glyph_run.run();
+                        let font = run.font();
+                        let font_size = run.font_size();
+                        let coords = run.normalized_coords();
+
+                        guard
+                            .scene
+                            .draw_glyphs(font)
+                            .brush(&brush)
+                            .hint(false)
+                            .transform(kurbo::Affine::translate((cmd.x as f64, cmd.y as f64)))
+                            .font_size(font_size)
+                            .normalized_coords(coords)
+                            .draw(
+                                Fill::NonZero,
+                                glyph_run.glyphs().map(|glyph| {
+                                    let gx = glyph_x + glyph.x;
+                                    let gy = glyph_y - glyph.y;
+                                    glyph_x += glyph.advance;
+                                    vello::Glyph {
+                                        id: glyph.id,
+                                        x: gx,
+                                        y: gy,
+                                    }
+                                }),
+                            );
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }

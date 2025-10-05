@@ -57,6 +57,27 @@ typedef struct {
   int line_count;
 } mcore_text_metrics_t;
 
+typedef struct {
+  float width;
+  float height;
+} mcore_text_size_t;
+
+typedef enum {
+  MCORE_DRAW_CMD_ROUNDED_RECT = 0,
+  MCORE_DRAW_CMD_TEXT = 1,
+} mcore_draw_cmd_kind_t;
+
+typedef struct {
+  mcore_draw_cmd_kind_t kind;
+  float x, y, width, height, radius;
+  float color[4];
+  const char* text_ptr;
+  float font_size;
+  float wrap_width;
+  int font_id;
+  unsigned char _padding[12];
+} mcore_draw_command_t;
+
 typedef enum { MCORE_OK = 0, MCORE_ERR = 1 } mcore_status_t;
 
 // Lifecycle
@@ -73,7 +94,9 @@ int mcore_font_register(mcore_context_t* ctx, const mcore_font_blob_t* blob);
 void mcore_begin_frame(mcore_context_t* ctx, double time_seconds);
 void mcore_rect_rounded(mcore_context_t* ctx, const mcore_rounded_rect_t* rect);
 void mcore_text_layout(mcore_context_t* ctx, const mcore_text_req_t* req, mcore_text_metrics_t* out);
+void mcore_measure_text(mcore_context_t* ctx, const char* text, float font_size, float max_width, mcore_text_size_t* out);
 void mcore_text_draw(mcore_context_t* ctx, const mcore_text_req_t* req, float x, float y, mcore_rgba_t color);
+void mcore_render_commands(mcore_context_t* ctx, const mcore_draw_command_t* commands, int count);
 mcore_status_t mcore_end_frame_present(mcore_context_t* ctx, mcore_rgba_t clear);
 
 // Diagnostics
