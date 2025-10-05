@@ -17,7 +17,7 @@ pub const UI = struct {
     commands: commands_mod.CommandBuffer,
     a11y_builder: a11y_mod.TreeBuilder,
 
-    // Layout stack (TODO: support nesting in future)
+    // Layout stack (supports arbitrary nesting)
     layout_stack: std.ArrayList(LayoutFrame),
 
     // Window properties
@@ -36,6 +36,12 @@ pub const UI = struct {
     // Text input widgets (keyed by ID)
     text_inputs: std.AutoHashMap(u64, TextInputWidget),
 
+    // Track buttons that were clicked this frame (filled during rendering)
+    clicked_buttons: std.AutoHashMap(u64, void),
+
+    // Debug visualization
+    debug_bounds: bool = false,
+
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, ctx: *c.mcore_context_t, width: f32, height: f32) !UI {
@@ -50,6 +56,7 @@ pub const UI = struct {
             .height = height,
             .clickable_widgets = std.ArrayList(ClickableWidget){},
             .text_inputs = std.AutoHashMap(u64, TextInputWidget).init(allocator),
+            .clicked_buttons = std.AutoHashMap(u64, void).init(allocator),
             .allocator = allocator,
         };
     }
@@ -62,12 +69,15 @@ pub const UI = struct {
         self.layout_stack.deinit(self.allocator);
         self.clickable_widgets.deinit(self.allocator);
         self.text_inputs.deinit();
+        self.clicked_buttons.deinit();
     }
 
     pub fn beginFrame(self: *UI) void {
         self.commands.reset();
         self.focus.beginFrame();
         self.clickable_widgets.clearRetainingCapacity();
+        // Note: Don't clear clicked_buttons here! They need to persist from
+        // the previous frame's rendering to this frame's button() calls
 
         self.a11y_builder.deinit();
         self.a11y_builder = a11y_mod.TreeBuilder.init(self.allocator, 1);
@@ -98,6 +108,10 @@ pub const UI = struct {
     pub fn updateSize(self: *UI, width: f32, height: f32) void {
         self.width = width;
         self.height = height;
+    }
+
+    pub fn setDebugBounds(self: *UI, enabled: bool) void {
+        self.debug_bounds = enabled;
     }
 
     // ============================================================================
@@ -194,21 +208,14 @@ pub const UI = struct {
     // ============================================================================
 
     pub fn beginVstack(self: *UI, opts: VstackOptions) !void {
-        // TODO: No nesting support yet - panic if we try
-        if (self.layout_stack.items.len > 0) {
-            @panic("Layout nesting not yet supported! Only one begin/end pair allowed per frame.");
-        }
-
-        var flex = flex_mod.FlexContainer.init(self.allocator, .Vertical);
-        flex.gap = opts.gap;
-        flex.padding = opts.padding;
-
+        // Nesting is now supported!
         try self.layout_stack.append(self.allocator, .{
             .kind = .Vstack,
-            .flex = flex,
-            .x = opts.padding,
-            .y = opts.padding,
-            .current_pos = opts.padding,
+            .gap = opts.gap,
+            .padding = opts.padding,
+            .children = std.ArrayList(WidgetData){},
+            .x = 0,
+            .y = 0,
         });
     }
 
@@ -218,31 +225,44 @@ pub const UI = struct {
         }
 
         var frame = self.layout_stack.pop() orelse unreachable;
-        defer frame.flex.deinit();
 
-        // Do layout at root level
-        const constraints = layout_mod.BoxConstraints.loose(self.width, self.height);
-        _ = frame.flex.layout_children(constraints) catch return;
-        // Note: We don't use the rects here because widgets already drew themselves
-        // This is the simple immediate-mode approach - widgets draw as they're created
+        // If this is a nested layout, add it as a child to parent
+        if (self.layout_stack.items.len > 0) {
+            var parent = &self.layout_stack.items[self.layout_stack.items.len - 1];
+            parent.children.append(self.allocator, .{
+                .layout = .{
+                    .kind = .Vstack,
+                    .gap = frame.gap,
+                    .padding = frame.padding,
+                    .children = frame.children, // Transfer ownership
+                },
+            }) catch return;
+        } else {
+            // Root layout - do the actual layout and rendering!
+            defer frame.children.deinit(self.allocator);
+
+            // Clear clicked_buttons from PREVIOUS frame before rendering
+            // This frame's rendering will populate it with NEW clicks
+            self.clicked_buttons.clearRetainingCapacity();
+
+            self.layoutAndRender(frame, .{
+                .x = 0,
+                .y = 0,
+                .width = self.width,
+                .height = self.height,
+            }) catch return;
+        }
     }
 
     pub fn beginHstack(self: *UI, opts: HstackOptions) !void {
-        // TODO: No nesting support yet - panic if we try
-        if (self.layout_stack.items.len > 0) {
-            @panic("Layout nesting not yet supported! Only one begin/end pair allowed per frame.");
-        }
-
-        var flex = flex_mod.FlexContainer.init(self.allocator, .Horizontal);
-        flex.gap = opts.gap;
-        flex.padding = opts.padding;
-
+        // Nesting is now supported!
         try self.layout_stack.append(self.allocator, .{
             .kind = .Hstack,
-            .flex = flex,
-            .x = opts.padding,
-            .y = opts.padding,
-            .current_pos = opts.padding,
+            .gap = opts.gap,
+            .padding = opts.padding,
+            .children = std.ArrayList(WidgetData){},
+            .x = 0,
+            .y = 0,
         });
     }
 
@@ -252,10 +272,33 @@ pub const UI = struct {
         }
 
         var frame = self.layout_stack.pop() orelse unreachable;
-        defer frame.flex.deinit();
 
-        const constraints = layout_mod.BoxConstraints.loose(self.width, self.height);
-        _ = frame.flex.layout_children(constraints) catch return;
+        // If this is a nested layout, add it as a child to parent
+        if (self.layout_stack.items.len > 0) {
+            var parent = &self.layout_stack.items[self.layout_stack.items.len - 1];
+            parent.children.append(self.allocator, .{
+                .layout = .{
+                    .kind = .Hstack,
+                    .gap = frame.gap,
+                    .padding = frame.padding,
+                    .children = frame.children, // Transfer ownership
+                },
+            }) catch return;
+        } else {
+            // Root layout - do the actual layout and rendering!
+            defer frame.children.deinit(self.allocator);
+
+            // Clear clicked_buttons from PREVIOUS frame before rendering
+            // This frame's rendering will populate it with NEW clicks
+            self.clicked_buttons.clearRetainingCapacity();
+
+            self.layoutAndRender(frame, .{
+                .x = 0,
+                .y = 0,
+                .width = self.width,
+                .height = self.height,
+            }) catch return;
+        }
     }
 
     // ============================================================================
@@ -279,90 +322,35 @@ pub const UI = struct {
     // ============================================================================
 
     pub fn label(self: *UI, text: [:0]const u8, opts: LabelOptions) !void {
-        const size = self.measureText(text, opts.size, self.width);
-        const width = size.width + (opts.padding * 2);
-        const height = size.height + (opts.padding * 2);
-        const pos = try self.allocateSpace(width, height);
-
-        // Draw background if specified
-        if (opts.bg_color) |bg| {
-            try self.commands.roundedRect(pos.x, pos.y, width, height, 4, bg);
+        if (self.layout_stack.items.len == 0) {
+            @panic("label() called outside layout! Use beginVstack/beginHstack first.");
         }
 
-        // Draw text
-        const text_x = pos.x + opts.padding;
-        const text_y = pos.y + opts.padding;
-        try self.commands.text(text, text_x, text_y, opts.size, size.width, opts.color);
-
-        // Labels are not interactive, so no accessibility node needed
+        var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
+        try frame.children.append(self.allocator, .{
+            .label = .{ .text = text, .opts = opts },
+        });
     }
 
     pub fn button(self: *UI, label_text: [:0]const u8, opts: ButtonOptions) !bool {
-        // Auto-generate ID from label
+        if (self.layout_stack.items.len == 0) {
+            @panic("button() called outside layout! Use beginVstack/beginHstack first.");
+        }
+
+        // Generate ID for the button
         const id_str = opts.id orelse label_text;
         try self.id_system.pushID(id_str);
         const id = self.id_system.getCurrentID();
-        defer self.id_system.popID();
+        self.id_system.popID();
 
-        // Register as focusable
-        try self.focus.registerFocusable(id);
-        const is_focused = self.focus.isFocused(id);
-
-        // Measure button
-        const padding_x: f32 = 20;
-        const padding_y: f32 = 15;
-        const font_size: f32 = 18;
-
-        const text_size = self.measureText(label_text, font_size, 1000);
-        const width = opts.width orelse (text_size.width + padding_x * 2);
-        const height = opts.height orelse (text_size.height + padding_y * 2);
-
-        const pos = try self.allocateSpace(width, height);
-
-        // Check if hovered or pressed
-        const bounds = layout_mod.Rect{ .x = pos.x, .y = pos.y, .width = width, .height = height };
-        const is_hovered = bounds.contains(self.mouse_x, self.mouse_y);
-        const is_pressed = is_hovered and self.mouse_down;
-
-        // Draw background with visual states
-        const bg_color = if (is_pressed)
-            [4]f32{ 0.5, 0.6, 0.9, 1.0 } // Lighter blue when pressed
-        else if (is_focused)
-            [4]f32{ 0.4, 0.5, 0.8, 1.0 } // Blue when focused
-        else if (is_hovered)
-            [4]f32{ 0.35, 0.35, 0.45, 1.0 } // Slightly lighter when hovered
-        else
-            [4]f32{ 0.3, 0.3, 0.4, 1.0 }; // Default
-
-        try self.commands.roundedRect(pos.x, pos.y, width, height, 8, bg_color);
-
-        // Draw text (centered)
-        const text_x = pos.x + (width - text_size.width) / 2.0;
-        const text_y = pos.y + (height - text_size.height) / 2.0;
-        try self.commands.text(label_text, text_x, text_y, font_size, text_size.width, .{ 1, 1, 1, 1 });
-
-        // Track for hit testing
-        try self.clickable_widgets.append(self.allocator, .{
-            .id = id,
-            .kind = .Button,
-            .bounds = .{ .x = pos.x, .y = pos.y, .width = width, .height = height },
+        // Store button data for deferred rendering
+        var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
+        try frame.children.append(self.allocator, .{
+            .button = .{ .id = id, .text = label_text, .opts = opts },
         });
 
-        // Add to accessibility tree
-        var a11y_node = a11y_mod.Node.init(self.allocator, id, .Button, .{
-            .x = pos.x,
-            .y = pos.y,
-            .width = width,
-            .height = height,
-        });
-        a11y_node.setLabel(label_text);
-        a11y_node.addAction(a11y_mod.Actions.Focus);
-        a11y_node.addAction(a11y_mod.Actions.Click);
-        try self.a11y_builder.addNode(a11y_node);
-
-        // Check if clicked
-        const clicked = self.wasClicked(pos.x, pos.y, width, height);
-        return clicked;
+        // Check if this button was clicked in the previous frame's rendering pass
+        return self.clicked_buttons.contains(id);
     }
 
     pub fn spacer(self: *UI, flex: f32) !void {
@@ -371,19 +359,271 @@ pub const UI = struct {
         }
 
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
-        try frame.flex.addSpacer(flex);
-
-        // Spacers don't draw anything, but they affect layout
-        // In immediate mode, the space is "consumed" but nothing renders
-        // This works because allocateSpace is called by actual widgets, not spacers
+        try frame.children.append(self.allocator, .{
+            .spacer = .{ .flex = flex },
+        });
     }
 
     pub fn textInput(self: *UI, id_str: []const u8, buffer: []u8, opts: TextInputOptions) !bool {
+        if (self.layout_stack.items.len == 0) {
+            @panic("textInput() called outside layout! Use beginVstack/beginHstack first.");
+        }
+
         // Generate ID
         try self.id_system.pushID(id_str);
         const id = self.id_system.getCurrentID();
-        defer self.id_system.popID();
+        self.id_system.popID();
 
+        // Store text input data for deferred rendering
+        var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
+        try frame.children.append(self.allocator, .{
+            .text_input = .{ .id = id, .id_str = id_str, .buffer = buffer, .opts = opts },
+        });
+
+        // Return false during declaration phase
+        return false;
+    }
+
+    // ============================================================================
+    // Layout and Rendering Engine (Deferred Tree Traversal)
+    // ============================================================================
+
+    fn layoutAndRender(self: *UI, frame: LayoutFrame, bounds: layout_mod.Rect) !void {
+        // Draw debug bounds for the layout container itself
+        if (frame.kind == .Vstack) {
+            // Yellow for Vstack
+            self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, .{ 1, 1, 0, 0.6 });
+        } else {
+            // Orange for Hstack
+            self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, .{ 1, 0.5, 0, 0.6 });
+        }
+
+        // Step 1: Measure all children recursively
+        var flex = flex_mod.FlexContainer.init(
+            self.allocator,
+            if (frame.kind == .Vstack) .Vertical else .Horizontal,
+        );
+        defer flex.deinit();
+
+        flex.gap = frame.gap;
+        flex.padding = frame.padding;
+
+        for (frame.children.items) |child| {
+            switch (child) {
+                .label => |data| {
+                    const size = self.measureText(data.text, data.opts.size, bounds.width);
+                    try flex.addChild(.{
+                        .width = size.width + data.opts.padding * 2,
+                        .height = size.height + data.opts.padding * 2,
+                    }, 0);
+                },
+                .button => |data| {
+                    const padding_x: f32 = 20;
+                    const padding_y: f32 = 15;
+                    const font_size: f32 = 18;
+                    const text_size = self.measureText(data.text, font_size, 1000);
+                    const width = data.opts.width orelse (text_size.width + padding_x * 2);
+                    const height = data.opts.height orelse (text_size.height + padding_y * 2);
+                    try flex.addChild(.{ .width = width, .height = height }, 0);
+                },
+                .text_input => |data| {
+                    try flex.addChild(.{ .width = data.opts.width, .height = data.opts.height }, 0);
+                },
+                .spacer => |data| {
+                    try flex.addSpacer(data.flex);
+                },
+                .layout => |nested| {
+                    // Recursively measure nested layout!
+                    const nested_size = try self.measureLayout(nested, bounds);
+                    try flex.addChild(nested_size, 0);
+                },
+            }
+        }
+
+        // Step 2: Calculate positions
+        const constraints = layout_mod.BoxConstraints.loose(bounds.width, bounds.height);
+        const rects = try flex.layout_children(constraints);
+        defer self.allocator.free(rects);
+
+        // Step 3: Render each child at its calculated position
+        for (frame.children.items, rects) |child, rect| {
+            const abs_x = bounds.x + rect.x;
+            const abs_y = bounds.y + rect.y;
+
+            switch (child) {
+                .label => |data| {
+                    try self.renderLabel(data.text, data.opts, abs_x, abs_y, rect.width, rect.height);
+                },
+                .button => |data| {
+                    try self.renderButton(data.id, data.text, data.opts, abs_x, abs_y, rect.width, rect.height);
+                },
+                .text_input => |data| {
+                    try self.renderTextInput(data.id, data.id_str, data.buffer, data.opts, abs_x, abs_y);
+                },
+                .spacer => {}, // Spacers don't render
+                .layout => |nested| {
+                    // Recursively render nested layout!
+                    const nested_frame = LayoutFrame{
+                        .kind = nested.kind,
+                        .gap = nested.gap,
+                        .padding = nested.padding,
+                        .children = nested.children,
+                        .x = 0,
+                        .y = 0,
+                    };
+                    try self.layoutAndRender(nested_frame, .{
+                        .x = abs_x,
+                        .y = abs_y,
+                        .width = rect.width,
+                        .height = rect.height,
+                    });
+                },
+            }
+        }
+    }
+
+    fn measureLayout(self: *UI, layout_data: anytype, parent_bounds: layout_mod.Rect) !layout_mod.Size {
+        // Create a temporary flex container to measure the layout
+        var flex = flex_mod.FlexContainer.init(
+            self.allocator,
+            if (layout_data.kind == .Vstack) .Vertical else .Horizontal,
+        );
+        defer flex.deinit();
+
+        flex.gap = layout_data.gap;
+        flex.padding = layout_data.padding;
+
+        for (layout_data.children.items) |child| {
+            switch (child) {
+                .label => |data| {
+                    const size = self.measureText(data.text, data.opts.size, parent_bounds.width);
+                    try flex.addChild(.{
+                        .width = size.width + data.opts.padding * 2,
+                        .height = size.height + data.opts.padding * 2,
+                    }, 0);
+                },
+                .button => |data| {
+                    const padding_x: f32 = 20;
+                    const padding_y: f32 = 15;
+                    const font_size: f32 = 18;
+                    const text_size = self.measureText(data.text, font_size, 1000);
+                    const width = data.opts.width orelse (text_size.width + padding_x * 2);
+                    const height = data.opts.height orelse (text_size.height + padding_y * 2);
+                    try flex.addChild(.{ .width = width, .height = height }, 0);
+                },
+                .text_input => |data| {
+                    try flex.addChild(.{ .width = data.opts.width, .height = data.opts.height }, 0);
+                },
+                .spacer => |data| {
+                    try flex.addSpacer(data.flex);
+                },
+                .layout => |nested| {
+                    // Recursively measure!
+                    const nested_size = try self.measureLayout(nested, parent_bounds);
+                    try flex.addChild(nested_size, 0);
+                },
+            }
+        }
+
+        // Do a layout pass to get the total size
+        const constraints = layout_mod.BoxConstraints.loose(parent_bounds.width, parent_bounds.height);
+        const rects = try flex.layout_children(constraints);
+        defer self.allocator.free(rects);
+
+        // Calculate bounding box of all children
+        var min_x: f32 = std.math.floatMax(f32);
+        var min_y: f32 = std.math.floatMax(f32);
+        var max_x: f32 = std.math.floatMin(f32);
+        var max_y: f32 = std.math.floatMin(f32);
+
+        for (rects) |rect| {
+            min_x = @min(min_x, rect.x);
+            min_y = @min(min_y, rect.y);
+            max_x = @max(max_x, rect.x + rect.width);
+            max_y = @max(max_y, rect.y + rect.height);
+        }
+
+        return .{
+            .width = if (rects.len > 0) (max_x - min_x) else layout_data.padding * 2,
+            .height = if (rects.len > 0) (max_y - min_y) else layout_data.padding * 2,
+        };
+    }
+
+    fn renderLabel(self: *UI, text: [:0]const u8, opts: LabelOptions, x: f32, y: f32, width: f32, height: f32) !void {
+        // Draw background if specified
+        if (opts.bg_color) |bg| {
+            try self.commands.roundedRect(x, y, width, height, 4, bg);
+        }
+
+        // Draw text
+        const text_x = x + opts.padding;
+        const text_y = y + opts.padding;
+        const text_width = width - opts.padding * 2;
+        try self.commands.text(text, text_x, text_y, opts.size, text_width, opts.color);
+
+        // Debug bounds (cyan for labels)
+        self.drawDebugRect(x, y, width, height, .{ 0, 1, 1, 0.8 });
+    }
+
+    fn renderButton(self: *UI, id: u64, label_text: [:0]const u8, _: ButtonOptions, x: f32, y: f32, width: f32, height: f32) !void {
+        // Register as focusable
+        try self.focus.registerFocusable(id);
+        const is_focused = self.focus.isFocused(id);
+
+        // Check if hovered or pressed
+        const bounds = layout_mod.Rect{ .x = x, .y = y, .width = width, .height = height };
+        const is_hovered = bounds.contains(self.mouse_x, self.mouse_y);
+        const is_pressed = is_hovered and self.mouse_down;
+
+        // Draw background with visual states
+        const bg_color = if (is_pressed)
+            [4]f32{ 0.5, 0.6, 0.9, 1.0 }
+        else if (is_focused)
+            [4]f32{ 0.4, 0.5, 0.8, 1.0 }
+        else if (is_hovered)
+            [4]f32{ 0.35, 0.35, 0.45, 1.0 }
+        else
+            [4]f32{ 0.3, 0.3, 0.4, 1.0 };
+
+        try self.commands.roundedRect(x, y, width, height, 8, bg_color);
+
+        // Draw text (centered)
+        const font_size: f32 = 18;
+        const text_size = self.measureText(label_text, font_size, 1000);
+        const text_x = x + (width - text_size.width) / 2.0;
+        const text_y = y + (height - text_size.height) / 2.0;
+        try self.commands.text(label_text, text_x, text_y, font_size, text_size.width, .{ 1, 1, 1, 1 });
+
+        // Track for hit testing
+        try self.clickable_widgets.append(self.allocator, .{
+            .id = id,
+            .kind = .Button,
+            .bounds = bounds,
+        });
+
+        // Check if clicked (for next frame)
+        const clicked = self.wasClicked(x, y, width, height);
+        if (clicked) {
+            try self.clicked_buttons.put(id, {});
+        }
+
+        // Debug bounds (green for buttons)
+        self.drawDebugRect(x, y, width, height, .{ 0, 1, 0, 0.9 });
+
+        // Add to accessibility tree
+        var a11y_node = a11y_mod.Node.init(self.allocator, id, .Button, .{
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = height,
+        });
+        a11y_node.setLabel(label_text);
+        a11y_node.addAction(a11y_mod.Actions.Focus);
+        a11y_node.addAction(a11y_mod.Actions.Click);
+        try self.a11y_builder.addNode(a11y_node);
+    }
+
+    fn renderTextInput(self: *UI, id: u64, id_str: []const u8, buffer: []u8, opts: TextInputOptions, x: f32, y: f32) !void {
         // Get or create text input widget
         const gop = try self.text_inputs.getOrPut(id);
         if (!gop.found_existing) {
@@ -395,26 +635,24 @@ pub const UI = struct {
         try self.focus.registerFocusable(id);
         const is_focused = self.focus.isFocused(id);
 
-        const pos = try self.allocateSpace(opts.width, opts.height);
-
         // Store position for hit testing
-        widget.x = pos.x;
-        widget.y = pos.y;
+        widget.x = x;
+        widget.y = y;
 
         // Render
-        widget.render(self.ctx, &self.commands, id, pos.x, pos.y, is_focused, false);
+        widget.render(self.ctx, &self.commands, id, x, y, is_focused, false);
 
         // Track for hit testing
         try self.clickable_widgets.append(self.allocator, .{
             .id = id,
             .kind = .TextInput,
-            .bounds = .{ .x = pos.x, .y = pos.y, .width = opts.width, .height = opts.height },
+            .bounds = .{ .x = x, .y = y, .width = opts.width, .height = opts.height },
         });
 
         // Add to accessibility tree
         var a11y_node = a11y_mod.Node.init(self.allocator, id, .TextInput, .{
-            .x = pos.x,
-            .y = pos.y,
+            .x = x,
+            .y = y,
             .width = opts.width,
             .height = opts.height,
         });
@@ -429,14 +667,15 @@ pub const UI = struct {
         a11y_node.addAction(a11y_mod.Actions.Focus);
         try self.a11y_builder.addNode(a11y_node);
 
-        // Check if text changed
+        // Update buffer if changed
         const current_text = widget.buffer[0..@intCast(len)];
         const changed = !std.mem.eql(u8, current_text, buffer[0..@min(current_text.len, buffer.len)]);
         if (changed and current_text.len <= buffer.len) {
             @memcpy(buffer[0..current_text.len], current_text);
         }
 
-        return changed;
+        // Debug bounds (magenta for text inputs)
+        self.drawDebugRect(x, y, opts.width, opts.height, .{ 1, 0, 1, 0.9 });
     }
 
     // ============================================================================
@@ -493,18 +732,65 @@ pub const UI = struct {
 
         return in_bounds;
     }
+
+    fn drawDebugRect(self: *UI, x: f32, y: f32, w: f32, h: f32, color: [4]f32) void {
+        if (!self.debug_bounds) return;
+
+        const line_width: f32 = 2;
+        // Draw 4 edges as thin rectangles to create an outline
+        // Top edge
+        self.commands.roundedRect(x, y, w, line_width, 0, color) catch {};
+        // Bottom edge
+        self.commands.roundedRect(x, y + h - line_width, w, line_width, 0, color) catch {};
+        // Left edge
+        self.commands.roundedRect(x, y, line_width, h, 0, color) catch {};
+        // Right edge
+        self.commands.roundedRect(x + w - line_width, y, line_width, h, 0, color) catch {};
+    }
 };
 
 // ============================================================================
 // Supporting Types
 // ============================================================================
 
+// Shared enum for layout direction
+const LayoutKind = enum { Vstack, Hstack };
+
+// Widget data stored during declaration phase
+const WidgetData = union(enum) {
+    label: struct {
+        text: [:0]const u8,
+        opts: LabelOptions,
+    },
+    button: struct {
+        id: u64,
+        text: [:0]const u8,
+        opts: ButtonOptions,
+    },
+    text_input: struct {
+        id: u64,
+        id_str: []const u8,
+        buffer: []u8,
+        opts: TextInputOptions,
+    },
+    spacer: struct {
+        flex: f32,
+    },
+    layout: struct {
+        kind: LayoutKind,
+        gap: f32,
+        padding: f32,
+        children: std.ArrayList(WidgetData),
+    },
+};
+
 const LayoutFrame = struct {
-    kind: enum { Vstack, Hstack },
-    flex: flex_mod.FlexContainer,
+    kind: LayoutKind,
+    gap: f32,
+    padding: f32,
+    children: std.ArrayList(WidgetData), // Store children instead of immediate rendering
     x: f32,
     y: f32,
-    current_pos: f32, // Current position along main axis
 };
 
 const ClickableWidget = struct {
