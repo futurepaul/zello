@@ -3,8 +3,8 @@ const std = @import("std");
 extern fn mv_app_init(width: c_int, height: c_int, title: [*:0]const u8) ?*anyopaque;
 extern fn mv_get_ns_view() ?*anyopaque;
 extern fn mv_get_metal_layer() ?*anyopaque;
-extern fn mv_set_frame_callback(cb: *const fn (t: f64) callconv(.C) void) void;
-extern fn mv_set_resize_callback(cb: *const fn (w: c_int, h: c_int, scale: f32) callconv(.C) void) void;
+extern fn mv_set_frame_callback(cb: *const fn (t: f64) callconv(.c) void) void;
+extern fn mv_set_resize_callback(cb: *const fn (w: c_int, h: c_int, scale: f32) callconv(.c) void) void;
 extern fn mv_app_run() void;
 
 const c = @cImport({
@@ -14,7 +14,7 @@ const c = @cImport({
 var g_ctx: ?*c.mcore_context_t = null;
 var g_desc: c.mcore_surface_desc_t = undefined;
 
-fn on_resize(w: c_int, h: c_int, scale: f32) callconv(.C) void {
+fn on_resize(w: c_int, h: c_int, scale: f32) callconv(.c) void {
     g_desc.u.macos.width_px = w;
     g_desc.u.macos.height_px = h;
     g_desc.u.macos.scale_factor = scale;
@@ -23,7 +23,7 @@ fn on_resize(w: c_int, h: c_int, scale: f32) callconv(.C) void {
     }
 }
 
-fn on_frame(t: f64) callconv(.C) void {
+fn on_frame(t: f64) callconv(.c) void {
     if (g_ctx) |ctx| {
         c.mcore_begin_frame(ctx, t);
 
@@ -47,7 +47,7 @@ fn on_frame(t: f64) callconv(.C) void {
 
         // Draw text
         const text_req = c.mcore_text_req_t{
-            .utf8 = "justin is gay",
+            .utf8 = "Hello from Zello!",
             .wrap_width = 400,
             .font_size_px = 24,
             .font_id = 0,

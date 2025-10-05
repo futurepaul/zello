@@ -6,10 +6,20 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "zig_host_app",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
+
+    // On macOS, add SDK framework path if SDKROOT is set
+    if (target.result.os.tag == .macos) {
+        if (std.posix.getenv("SDKROOT")) |sdkroot| {
+            const frameworks_path = b.fmt("{s}/System/Library/Frameworks", .{sdkroot});
+            exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = frameworks_path });
+        }
+    }
 
     // Zig sources
     exe.addCSourceFile(.{
@@ -25,10 +35,11 @@ pub fn build(b: *std.Build) void {
     exe.addObjectFile(b.path("rust/engine/target/release/libmasonry_core_capi.a"));
 
     // Apple frameworks
-    exe.linkFramework("AppKit");
-    exe.linkFramework("QuartzCore");
-    exe.linkFramework("Metal");
-    exe.linkSystemLibrary("objc");
+    if (target.result.os.tag == .macos) {
+        exe.linkFramework("AppKit");
+        exe.linkFramework("QuartzCore");
+        exe.linkFramework("Metal");
+    }
 
     b.installArtifact(exe);
 
