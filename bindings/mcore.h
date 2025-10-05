@@ -38,6 +38,25 @@ typedef struct {
   mcore_rgba_t fill;
 } mcore_rounded_rect_t;
 
+typedef struct {
+  const unsigned char* data;
+  size_t len;
+  const char* name;
+} mcore_font_blob_t;
+
+typedef struct {
+  const char* utf8;
+  float wrap_width;
+  float font_size_px;
+  int font_id;
+} mcore_text_req_t;
+
+typedef struct {
+  float advance_w;
+  float advance_h;
+  int line_count;
+} mcore_text_metrics_t;
+
 typedef enum { MCORE_OK = 0, MCORE_ERR = 1 } mcore_status_t;
 
 // Lifecycle
@@ -47,9 +66,14 @@ void             mcore_destroy(mcore_context_t* ctx);
 // Resize/DPI
 void mcore_resize(mcore_context_t* ctx, const mcore_surface_desc_t* desc);
 
+// Resources
+int mcore_font_register(mcore_context_t* ctx, const mcore_font_blob_t* blob);
+
 // Frame
 void mcore_begin_frame(mcore_context_t* ctx, double time_seconds);
 void mcore_rect_rounded(mcore_context_t* ctx, const mcore_rounded_rect_t* rect);
+void mcore_text_layout(mcore_context_t* ctx, const mcore_text_req_t* req, mcore_text_metrics_t* out);
+void mcore_text_draw(mcore_context_t* ctx, const mcore_text_req_t* req, float x, float y, mcore_rgba_t color);
 mcore_status_t mcore_end_frame_present(mcore_context_t* ctx, mcore_rgba_t clear);
 
 // Diagnostics

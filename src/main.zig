@@ -45,6 +45,16 @@ fn on_frame(t: f64) callconv(.C) void {
         };
         c.mcore_rect_rounded(ctx, &rect);
 
+        // Draw text
+        const text_req = c.mcore_text_req_t{
+            .utf8 = "Hello, Zig/Rust!",
+            .wrap_width = 400,
+            .font_size_px = 24,
+            .font_id = 0,
+        };
+        const text_color = c.mcore_rgba_t{ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
+        c.mcore_text_draw(ctx, &text_req, 50, 180, text_color);
+
         const clear = c.mcore_rgba_t{ .r = 0.15, .g = 0.15, .b = 0.20, .a = 1.0 };
         const st = c.mcore_end_frame_present(ctx, clear);
         if (st != c.MCORE_OK) {

@@ -1,7 +1,10 @@
 use parking_lot::Mutex;
-use peniko::{Color, kurbo};
+use parley::layout::{Alignment, Layout};
+use parley::style::{FontFamily, FontStack, StyleProperty};
+use parley::{FontContext, LayoutContext};
+use peniko::{kurbo, Brush, Color};
 use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle};
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
 use std::sync::Arc;
 use vello::{AaSupport, Renderer, RendererOptions, Scene};
@@ -84,6 +87,31 @@ pub struct McoreRoundedRect {
     pub h: f32,
     pub radius: f32,
     pub fill: McoreRgba,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreFontBlob {
+    pub data: *const u8,
+    pub len: usize,
+    pub name: *const i8,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreTextReq {
+    pub utf8: *const i8,
+    pub wrap_width: f32,
+    pub font_size_px: f32,
+    pub font_id: i32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreTextMetrics {
+    pub advance_w: f32,
+    pub advance_h: f32,
+    pub line_count: i32,
 }
 
 struct Gfx {
@@ -231,6 +259,9 @@ struct Engine {
     gfx: Gfx,
     scene: Scene,
     time_s: f64,
+    font_cx: FontContext,
+    layout_cx: LayoutContext<Brush>,
+    fonts: Vec<Vec<u8>>,
 }
 
 #[repr(C)]
@@ -255,6 +286,9 @@ pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreConte
                         gfx: engine,
                         scene: Scene::new(),
                         time_s: 0.0,
+                        font_cx: FontContext::default(),
+                        layout_cx: LayoutContext::new(),
+                        fonts: Vec::new(),
                     };
                     Box::into_raw(Box::new(McoreContext(Arc::new(Mutex::new(eng)))))
                 }
@@ -329,6 +363,100 @@ pub extern "C" fn mcore_rect_rounded(ctx: *mut McoreContext, rect: *const McoreR
         None,
         &shape,
     );
+}
+
+#[no_mangle]
+pub extern "C" fn mcore_font_register(ctx: *mut McoreContext, blob: *const McoreFontBlob) -> i32 {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let blob = unsafe { blob.as_ref() }.unwrap();
+    let mut guard = ctx.0.lock();
+
+    let data = unsafe { std::slice::from_raw_parts(blob.data, blob.len) };
+    let font_data = data.to_vec();
+
+    guard.font_cx.collection.register_fonts(font_data.clone());
+    guard.fonts.push(font_data);
+
+    (guard.fonts.len() - 1) as i32
+}
+
+#[no_mangle]
+pub extern "C" fn mcore_text_layout(
+    ctx: *mut McoreContext,
+    req: *const McoreTextReq,
+    out: *mut McoreTextMetrics,
+) {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let req = unsafe { req.as_ref() }.unwrap();
+    let out = unsafe { out.as_mut() }.unwrap();
+    let mut guard = ctx.0.lock();
+
+    let text = unsafe { CStr::from_ptr(req.utf8) }.to_str().unwrap_or("");
+
+    // Simplified: just return estimated metrics based on font size
+    let char_count = text.chars().count();
+    let est_width = (char_count as f32 * req.font_size_px * 0.6).min(req.wrap_width);
+    let est_lines = ((char_count as f32 * req.font_size_px * 0.6) / req.wrap_width).ceil().max(1.0);
+
+    out.advance_w = est_width;
+    out.advance_h = req.font_size_px * est_lines;
+    out.line_count = est_lines as i32;
+}
+
+#[no_mangle]
+pub extern "C" fn mcore_text_draw(
+    ctx: *mut McoreContext,
+    req: *const McoreTextReq,
+    x: f32,
+    y: f32,
+    color: McoreRgba,
+) {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let req = unsafe { req.as_ref() }.unwrap();
+    let mut guard = ctx.0.lock();
+
+    let text = unsafe { CStr::from_ptr(req.utf8) }.to_str().unwrap_or("");
+
+    // Simplified text rendering: draw each character as a rectangle
+    // This is a placeholder - full text rendering would use proper font outlines
+    let char_width = req.font_size_px * 0.6;
+    let char_height = req.font_size_px;
+
+    let brush = Brush::Solid(Color::rgba(
+        color.r as f64,
+        color.g as f64,
+        color.b as f64,
+        color.a as f64,
+    ));
+
+    let mut x_offset = 0.0;
+    let mut y_offset = 0.0;
+
+    for ch in text.chars() {
+        if ch == '\n' || x_offset + char_width > req.wrap_width {
+            x_offset = 0.0;
+            y_offset += char_height * 1.2;
+        }
+
+        if ch != '\n' && !ch.is_whitespace() {
+            let char_rect = kurbo::Rect::new(
+                (x + x_offset) as f64,
+                (y + y_offset) as f64,
+                (x + x_offset + char_width * 0.8) as f64,
+                (y + y_offset + char_height * 0.8) as f64,
+            );
+
+            guard.scene.fill(
+                vello::peniko::Fill::NonZero,
+                kurbo::Affine::IDENTITY,
+                &brush,
+                None,
+                &char_rect,
+            );
+        }
+
+        x_offset += char_width;
+    }
 }
 
 #[no_mangle]
