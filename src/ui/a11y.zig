@@ -2,7 +2,7 @@
 // Builds AccessKit-compatible accessibility trees in Zig
 
 const std = @import("std");
-const c_api = @import("../c_api.zig");
+const c_api = @import("../renderer/c_api.zig");
 const c = c_api.c;
 
 /// Accessibility node roles (matches AccessKit Role enum)

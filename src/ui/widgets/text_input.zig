@@ -1,7 +1,7 @@
 const std = @import("std");
 const layout_mod = @import("../layout.zig");
 const commands_mod = @import("../commands.zig");
-const c_api = @import("../../c_api.zig");
+const c_api = @import("../../renderer/c_api.zig");
 const c = c_api.c;
 
 pub const TextInput = struct {

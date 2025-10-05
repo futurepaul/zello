@@ -21,9 +21,9 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // Zig sources
+    // Objective-C sources
     exe.addCSourceFile(.{
-        .file = b.path("src/objc/metal_view.m"),
+        .file = b.path("src/platform/objc/metal_view.m"),
         .flags = &.{
             "-fobjc-arc",
         },
