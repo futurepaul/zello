@@ -31,6 +31,7 @@ const example = @import("examples/counter.zig");
 const example = @import("examples/hello_world.zig");
 const example = @import("examples/counter.zig");
 const example = @import("examples/counter_advanced.zig");
+const example = @import("examples/showcase.zig");
 ```
 
 Then run:
@@ -97,37 +98,30 @@ Features:
 - Last click timestamp
 - Larger counter display
 
-### 4. demo_simple.zig
-**Simple multi-widget demo**
+### 4. showcase.zig
+**Comprehensive feature showcase**
 
 Shows:
-- Multiple buttons in a row
-- Multiple text inputs
-- Toggle button (debug mode)
-- Dynamic labels
-- Window size display
-- All widgets in single horizontal layout
+- **Nested layouts** (VStack → HStack → VStack)
+- All widget types (buttons, labels, text input)
+- Debug bounds visualization toggle
+- Animated clear color background
+- Complex layout hierarchy
+- State management
+- Tab navigation
 
 **Run:**
 ```zig
-const example = @import("examples/demo_simple.zig");
+const example = @import("examples/showcase.zig");
 ```
 
 Features:
-- 3 clickable buttons
-- Debug toggle button
-- 2 text input fields
-- Title label
-- Window size label
-- Tab navigation between all focusable widgets
-
-⚠️ **Note:** Uses single-level layout only (no nesting)
-
-### 5. demo.zig
-**Full-featured demo** (preserved from original main.zig)
-
-⚠️ **Note:** This still uses the old API and won't compile without updates.
-Preserved as a reference for future porting to the new API with nested layouts.
+- Multi-level nested layouts demonstrating the layout system
+- Debug bounds toggle to visualize layout boxes
+- Text input with label
+- Multiple interactive buttons
+- Animated background (showcase feature only)
+- Demonstrates best practices for Zello apps
 
 ## Quick Commands
 

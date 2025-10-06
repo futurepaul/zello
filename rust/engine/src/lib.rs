@@ -1,27 +1,13 @@
 use parking_lot::Mutex;
-use parley::layout::{Alignment, AlignmentOptions, Layout, PositionedLayoutItem};
-use parley::style::{FontStack, StyleProperty};
-use parley::{FontContext, LayoutContext};
-use peniko::{kurbo, Blob, Brush, Color, FontData};
-use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle};
+use peniko::{Blob, Color, FontData};
 use std::ffi::{c_void, CStr};
-use std::ptr::NonNull;
 use std::sync::Arc;
-use vello::peniko::Fill;
-use vello::{AaConfig, AaSupport, Glyph, RenderParams, Renderer, RendererOptions, Scene};
+use vello::Scene;
 
+mod gfx;
+mod text;
 mod text_input;
 mod a11y;
-
-#[derive(Debug, thiserror::Error)]
-enum EngineError {
-    #[error("wgpu error: {0}")]
-    Wgpu(String),
-    #[error("invalid surface")]
-    InvalidSurface,
-    #[error("vello error: {0}")]
-    Vello(String),
-}
 
 thread_local! {
     static LAST_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
@@ -142,289 +128,12 @@ pub struct McoreDrawCommand {
     pub _padding: [u8; 12],
 }
 
-struct Gfx {
-    instance: wgpu::Instance,
-    surface: wgpu::Surface<'static>,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    renderer: Renderer,
-    blit_pipeline: wgpu::RenderPipeline,
-    blit_bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    size: (u32, u32),
-    scale: f32,
-}
-
-impl Gfx {
-    async fn new_macos(desc: &McoreMacSurface) -> Result<Self, EngineError> {
-        // SAFETY: we trust the caller to pass a valid NSView* and CAMetalLayer*.
-        // raw-window-handle only needs the NSView pointer populated.
-        let ns_view = NonNull::new(desc.ns_view).ok_or(EngineError::InvalidSurface)?;
-        let win = AppKitWindowHandle::new(ns_view);
-        let win = RawWindowHandle::AppKit(win);
-
-        let disp = RawDisplayHandle::AppKit(AppKitDisplayHandle::new());
-
-        let instance = wgpu::Instance::default();
-        // Unsafe: creating surface from raw handles is inherently unsafe.
-        let surface = unsafe {
-            instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                    raw_display_handle: disp,
-                    raw_window_handle: win,
-                })
-                .map_err(|e| EngineError::Wgpu(format!("{e:?}")))?
-        };
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|e| EngineError::Wgpu(format!("{e:?}")))?;
-
-        // Request device with higher limits for Vello
-        let mut limits = wgpu::Limits::default();
-        limits.max_storage_buffers_per_shader_stage = 8;
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("mcore-device".into()),
-                required_features: wgpu::Features::empty(),
-                required_limits: limits,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| EngineError::Wgpu(format!("{e:?}")))?;
-
-        let (w, h) = (desc.width_px.max(1) as u32, desc.height_px.max(1) as u32);
-        let caps = surface.get_capabilities(&adapter);
-
-        // Use native format - Vello's render_to_surface handles intermediate texture
-        let format = caps.formats[0];
-
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: w,
-            height: h,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
-
-        // Create Vello renderer
-        let renderer = Renderer::new(
-            &device,
-            RendererOptions {
-                use_cpu: false,
-                antialiasing_support: AaSupport::all(),
-                num_init_threads: std::num::NonZeroUsize::new(1),
-                pipeline_cache: None,
-            },
-        )
-        .map_err(|e| EngineError::Vello(format!("{e:?}")))?;
-
-        // Create blit shader to copy Rgba8Unorm intermediate to surface
-        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("blit".into()),
-            source: wgpu::ShaderSource::Wgsl(include_str!("blit.wgsl").into()),
-        });
-
-        let blit_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("blit_bgl".into()),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("blit_pl".into()),
-            bind_group_layouts: &[&blit_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blit".into()),
-            layout: Some(&blit_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &blit_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blit_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("blit_sampler".into()),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        Ok(Self {
-            instance,
-            surface,
-            adapter,
-            device,
-            queue,
-            config,
-            renderer,
-            blit_pipeline,
-            blit_bind_group_layout,
-            sampler,
-            size: (w, h),
-            scale: desc.scale_factor,
-        })
-    }
-
-    fn resize(&mut self, w: u32, h: u32, scale: f32) {
-        if w == 0 || h == 0 {
-            return;
-        }
-        self.size = (w, h);
-        self.scale = scale;
-        self.config.width = w;
-        self.config.height = h;
-        self.surface.configure(&self.device, &self.config);
-    }
-
-    fn render_scene(&mut self, scene: &Scene, clear_color: Color) -> Result<(), EngineError> {
-        let frame = self
-            .surface
-            .get_current_texture()
-            .map_err(|e| EngineError::Wgpu(format!("acquire: {e:?}")))?;
-
-        // Create intermediate Rgba8Unorm texture for Vello rendering
-        let intermediate_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("intermediate".into()),
-            size: wgpu::Extent3d {
-                width: self.size.0,
-                height: self.size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-
-        let intermediate_view = intermediate_tex.create_view(&wgpu::TextureViewDescriptor::default());
-
-        // Render Vello scene to intermediate texture
-        self.renderer
-            .render_to_texture(
-                &self.device,
-                &self.queue,
-                scene,
-                &intermediate_view,
-                &RenderParams {
-                    base_color: clear_color,
-                    width: self.size.0,
-                    height: self.size.1,
-                    antialiasing_method: AaConfig::Msaa16,
-                },
-            )
-            .map_err(|e| EngineError::Vello(format!("{e:?}")))?;
-
-        // Blit intermediate to surface
-        let surface_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blit_bg".into()),
-            layout: &self.blit_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&intermediate_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("blit_encoder".into()),
-        });
-
-        {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("blit_pass".into()),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                ..Default::default()
-            });
-
-            rpass.set_pipeline(&self.blit_pipeline);
-            rpass.set_bind_group(0, &bind_group, &[]);
-            rpass.draw(0..3, 0..1);
-        }
-
-        self.queue.submit([encoder.finish()]);
-        frame.present();
-        Ok(())
-    }
-}
-
-struct TextContext {
-    font_cx: FontContext,
-    layout_cx: LayoutContext<Brush>,
-}
 
 struct Engine {
-    gfx: Gfx,
+    gfx: gfx::Gfx,
     scene: Scene,
     time_s: f64,
-    text_cx: TextContext,
+    text_cx: text::TextContext,
     fonts: Vec<(Vec<u8>, FontData)>,
     text_inputs: text_input::TextInputManager,
     a11y: Option<a11y::AccessibilityAdapter>,
@@ -445,17 +154,22 @@ pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreConte
     match desc.platform {
         McorePlatform::MacOS => {
             let mac = unsafe { desc.u.macos };
+            // Convert to gfx::MacSurface
+            let mac_surface = gfx::MacSurface {
+                ns_view: mac.ns_view,
+                ca_metal_layer: mac.ca_metal_layer,
+                scale_factor: mac.scale_factor,
+                width_px: mac.width_px,
+                height_px: mac.height_px,
+            };
             // block_on in a new thread so we don't block AppKit
-            match pollster::block_on(Gfx::new_macos(&mac)) {
+            match pollster::block_on(gfx::Gfx::new_macos(&mac_surface)) {
                 Ok(engine) => {
                     let eng = Engine {
                         gfx: engine,
                         scene: Scene::new(),
                         time_s: 0.0,
-                        text_cx: TextContext {
-                            font_cx: FontContext::default(),
-                            layout_cx: LayoutContext::new(),
-                        },
+                        text_cx: text::TextContext::default(),
                         fonts: Vec::new(),
                         text_inputs: text_input::TextInputManager::new(),
                         a11y: None,
@@ -488,12 +202,15 @@ pub extern "C" fn mcore_resize(ctx: *mut McoreContext, desc: *const McoreSurface
     let desc = unsafe { desc.as_ref() }.unwrap();
     if let McorePlatform::MacOS = desc.platform {
         let mac = unsafe { desc.u.macos };
+        let mac_surface = gfx::MacSurface {
+            ns_view: mac.ns_view,
+            ca_metal_layer: mac.ca_metal_layer,
+            scale_factor: mac.scale_factor,
+            width_px: mac.width_px,
+            height_px: mac.height_px,
+        };
         let mut guard = ctx.0.lock();
-        guard.gfx.resize(
-            mac.width_px.max(1) as u32,
-            mac.height_px.max(1) as u32,
-            mac.scale_factor,
-        );
+        let _ = guard.gfx.resize(&mac_surface);
     }
 }
 
@@ -511,7 +228,7 @@ pub extern "C" fn mcore_rect_rounded(ctx: *mut McoreContext, rect: *const McoreR
     let rect = unsafe { rect.as_ref() }.unwrap();
     let mut guard = ctx.0.lock();
 
-    let shape = kurbo::RoundedRect::new(
+    let shape = peniko::kurbo::RoundedRect::new(
         rect.x as f64,
         rect.y as f64,
         (rect.x + rect.w) as f64,
@@ -528,7 +245,7 @@ pub extern "C" fn mcore_rect_rounded(ctx: *mut McoreContext, rect: *const McoreR
 
     guard.scene.fill(
         vello::peniko::Fill::NonZero,
-        kurbo::Affine::IDENTITY,
+        peniko::kurbo::Affine::IDENTITY,
         color,
         None,
         &shape,
@@ -565,33 +282,19 @@ pub extern "C" fn mcore_text_layout(
     let mut guard = ctx.0.lock();
 
     let text = unsafe { CStr::from_ptr(req.utf8) }.to_str().unwrap_or("");
-    let scale = guard.gfx.scale;
+    let scale = guard.gfx.scale();
 
-    // Split borrows using raw pointers to avoid double mutable borrow
-    let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
-    let mut layout: Layout<Brush> = unsafe {
-        let text_cx = &mut *text_cx_ptr;
-        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
-        builder.push_default(StyleProperty::FontSize(req.font_size_px));
-        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
-        builder.build(text)
-    };
+    let metrics = text::layout_text(
+        &mut guard.text_cx,
+        text,
+        req.font_size_px,
+        req.wrap_width,
+        scale,
+    );
 
-    layout.break_all_lines(Some(req.wrap_width));
-    layout.align(None, Alignment::Start, AlignmentOptions::default());
-
-    let width = layout.width();
-
-    // Calculate proper height using line metrics (includes line spacing)
-    let mut total_height = 0.0f32;
-    for line in layout.lines() {
-        let metrics = line.metrics();
-        total_height += metrics.line_height;
-    }
-
-    out.advance_w = width;
-    out.advance_h = total_height;
-    out.line_count = layout.len() as i32;
+    out.advance_w = metrics.width;
+    out.advance_h = metrics.height;
+    out.line_count = metrics.line_count as i32;
 }
 
 #[no_mangle]
@@ -607,31 +310,18 @@ pub extern "C" fn mcore_measure_text(
     let out = unsafe { out.as_mut() }.unwrap();
     let mut guard = ctx.0.lock();
 
-    let scale = guard.gfx.scale;
+    let scale = guard.gfx.scale();
 
-    // Split borrows using raw pointers to avoid double mutable borrow
-    let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
-    let mut layout: Layout<Brush> = unsafe {
-        let text_cx = &mut *text_cx_ptr;
-        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
-        builder.push_default(StyleProperty::FontSize(font_size));
-        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
-        builder.build(text)
-    };
+    let (width, height) = text::measure_text(
+        &mut guard.text_cx,
+        text,
+        font_size,
+        max_width,
+        scale,
+    );
 
-    layout.break_all_lines(Some(max_width));
-    layout.align(None, Alignment::Start, AlignmentOptions::default());
-
-    out.width = layout.width();
-
-    // Calculate proper height using line metrics (includes line spacing)
-    let mut total_height = 0.0f32;
-    for line in layout.lines() {
-        let metrics = line.metrics();
-        total_height += metrics.line_height;
-    }
-
-    out.height = total_height;
+    out.width = width;
+    out.height = height;
 }
 
 #[no_mangle]
@@ -645,85 +335,16 @@ pub extern "C" fn mcore_measure_text_to_byte_offset(
     let text = unsafe { CStr::from_ptr(text) }.to_str().unwrap_or("");
     let mut guard = ctx.0.lock();
 
-    let scale = guard.gfx.scale;
+    let scale = guard.gfx.scale();
     let byte_offset = byte_offset.max(0) as usize;
-    let byte_offset = byte_offset.min(text.len());
 
-    // Split borrows
-    let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
-    let mut layout: Layout<Brush> = unsafe {
-        let text_cx = &mut *text_cx_ptr;
-        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
-        builder.push_default(StyleProperty::FontSize(font_size));
-        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
-        builder.build(text)
-    };
-
-    // Measure cursor position by adding a marker character after the cursor position
-    // This prevents trailing space collapse issues
-    if byte_offset == 0 {
-        return 0.0;
-    }
-
-    // Use a very large max_width to prevent wrapping in single-line inputs
-    let max_width_no_wrap = 100000.0;
-
-    if byte_offset >= text.len() {
-        // Cursor at end - use marker to handle trailing spaces
-        let text_with_marker = format!("{}|", text);
-        let mut marked_layout: Layout<Brush> = unsafe {
-            let text_cx = &mut *text_cx_ptr;
-            let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, &text_with_marker, scale, true);
-            builder.push_default(StyleProperty::FontSize(font_size));
-            builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
-            builder.build(&text_with_marker)
-        };
-        marked_layout.break_all_lines(Some(max_width_no_wrap));
-        marked_layout.align(None, Alignment::Start, AlignmentOptions::default());
-
-        // Measure marker
-        let mut marker_layout: Layout<Brush> = unsafe {
-            let text_cx = &mut *text_cx_ptr;
-            let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, "|", scale, true);
-            builder.push_default(StyleProperty::FontSize(font_size));
-            builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
-            builder.build("|")
-        };
-        marker_layout.break_all_lines(Some(max_width_no_wrap));
-        marker_layout.align(None, Alignment::Start, AlignmentOptions::default());
-
-        return marked_layout.width() - marker_layout.width();
-    }
-
-    // Get the substring up to the cursor and add a visible marker
-    let text_up_to_cursor = &text[..byte_offset];
-    let text_with_marker = format!("{}|", text_up_to_cursor);
-
-    // Measure with the marker
-    let mut marked_layout: Layout<Brush> = unsafe {
-        let text_cx = &mut *text_cx_ptr;
-        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, &text_with_marker, scale, true);
-        builder.push_default(StyleProperty::FontSize(font_size));
-        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
-        builder.build(&text_with_marker)
-    };
-
-    marked_layout.break_all_lines(Some(max_width_no_wrap));
-    marked_layout.align(None, Alignment::Start, AlignmentOptions::default());
-
-    // Now measure just the marker character to subtract its width
-    let mut marker_layout: Layout<Brush> = unsafe {
-        let text_cx = &mut *text_cx_ptr;
-        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, "|", scale, true);
-        builder.push_default(StyleProperty::FontSize(font_size));
-        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
-        builder.build("|")
-    };
-
-    marker_layout.break_all_lines(Some(max_width_no_wrap));
-    marker_layout.align(None, Alignment::Start, AlignmentOptions::default());
-
-    marked_layout.width() - marker_layout.width()
+    text::byte_offset_to_x(
+        &mut guard.text_cx,
+        text,
+        font_size,
+        byte_offset,
+        scale,
+    )
 }
 
 #[no_mangle]
@@ -739,59 +360,25 @@ pub extern "C" fn mcore_text_draw(
     let mut guard = ctx.0.lock();
 
     let text = unsafe { CStr::from_ptr(req.utf8) }.to_str().unwrap_or("");
-    let scale = guard.gfx.scale;
+    let scale = guard.gfx.scale();
+    let color_val = Color::new([color.r, color.g, color.b, color.a]);
 
-    // Split borrows using raw pointers to avoid double mutable borrow
-    let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
-    let mut layout: Layout<Brush> = unsafe {
-        let text_cx = &mut *text_cx_ptr;
-        let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
-        builder.push_default(StyleProperty::FontSize(req.font_size_px));
-        builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
-        builder.build(text)
-    };
+    // Use raw pointers to split borrows
+    let scene_ptr = &mut guard.scene as *mut Scene;
+    let text_cx_ptr = &mut guard.text_cx as *mut text::TextContext;
 
-    layout.break_all_lines(Some(req.wrap_width));
-    layout.align(None, Alignment::Start, AlignmentOptions::default());
-
-    let brush = Brush::Solid(Color::new([color.r, color.g, color.b, color.a]));
-
-    // Render text using masonry_core's pattern
-    for line in layout.lines() {
-        for item in line.items() {
-            let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-                continue;
-            };
-
-            let mut glyph_x = glyph_run.offset();
-            let glyph_y = glyph_run.baseline();
-            let run = glyph_run.run();
-            let font = run.font();
-            let font_size = run.font_size();
-            let coords = run.normalized_coords();
-
-            guard
-                .scene
-                .draw_glyphs(font)
-                .brush(&brush)
-                .hint(false)
-                .transform(kurbo::Affine::translate((x as f64, y as f64)))
-                .font_size(font_size)
-                .normalized_coords(coords)
-                .draw(
-                    Fill::NonZero,
-                    glyph_run.glyphs().map(|glyph| {
-                        let gx = glyph_x + glyph.x;
-                        let gy = glyph_y - glyph.y;
-                        glyph_x += glyph.advance;
-                        vello::Glyph {
-                            id: glyph.id,
-                            x: gx,
-                            y: gy,
-                        }
-                    }),
-                );
-        }
+    unsafe {
+        text::draw_text(
+            &mut *scene_ptr,
+            &mut *text_cx_ptr,
+            text,
+            x,
+            y,
+            req.font_size_px,
+            req.wrap_width,
+            color_val,
+            scale,
+        );
     }
 }
 
@@ -807,9 +394,8 @@ pub extern "C" fn mcore_push_clip_rect(
     let mut guard = ctx.0.lock();
 
     // Push a clip layer with the specified rectangle
-    use kurbo::Rect;
-    let clip_rect = Rect::new(x as f64, y as f64, (x + width) as f64, (y + height) as f64);
-    guard.scene.push_layer(vello::peniko::BlendMode::default(), 1.0, kurbo::Affine::IDENTITY, &clip_rect);
+    let clip_rect = peniko::kurbo::Rect::new(x as f64, y as f64, (x + width) as f64, (y + height) as f64);
+    guard.scene.push_layer(vello::peniko::BlendMode::default(), 1.0, peniko::kurbo::Affine::IDENTITY, &clip_rect);
 }
 
 #[no_mangle]
@@ -829,11 +415,17 @@ pub extern "C" fn mcore_render_commands(
     let commands = unsafe { std::slice::from_raw_parts(commands, count as usize) };
     let mut guard = ctx.0.lock();
 
+    let scale = guard.gfx.scale();
+
+    // Use raw pointers to split borrows for text rendering
+    let scene_ptr = &mut guard.scene as *mut Scene;
+    let text_cx_ptr = &mut guard.text_cx as *mut text::TextContext;
+
     for cmd in commands {
         match cmd.kind {
             0 => {
                 // RoundedRect
-                let shape = kurbo::RoundedRect::new(
+                let shape = peniko::kurbo::RoundedRect::new(
                     cmd.x as f64,
                     cmd.y as f64,
                     (cmd.x + cmd.width) as f64,
@@ -841,80 +433,46 @@ pub extern "C" fn mcore_render_commands(
                     cmd.radius as f64,
                 );
                 let color = Color::new([cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]]);
-                guard.scene.fill(Fill::NonZero, kurbo::Affine::IDENTITY, color, None, &shape);
+                unsafe {
+                    (*scene_ptr).fill(vello::peniko::Fill::NonZero, peniko::kurbo::Affine::IDENTITY, color, None, &shape);
+                }
             }
             1 => {
                 // Text
                 let text = unsafe { CStr::from_ptr(cmd.text_ptr) }.to_str().unwrap_or("");
-                let scale = guard.gfx.scale;
+                let color = Color::new([cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]]);
 
-                // Split borrows using raw pointers
-                let text_cx_ptr = &mut guard.text_cx as *mut TextContext;
-                let mut layout: Layout<Brush> = unsafe {
-                    let text_cx = &mut *text_cx_ptr;
-                    let mut builder = text_cx.layout_cx.ranged_builder(&mut text_cx.font_cx, text, scale, true);
-                    builder.push_default(StyleProperty::FontSize(cmd.font_size));
-                    builder.push_default(StyleProperty::FontStack(FontStack::Source("system-ui".into())));
-                    builder.build(text)
-                };
-
-                layout.break_all_lines(Some(cmd.wrap_width));
-                layout.align(None, Alignment::Start, AlignmentOptions::default());
-
-                let brush = Brush::Solid(Color::new([cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]]));
-
-                // Render text
-                for line in layout.lines() {
-                    for item in line.items() {
-                        let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-                            continue;
-                        };
-
-                        let mut glyph_x = glyph_run.offset();
-                        let glyph_y = glyph_run.baseline();
-                        let run = glyph_run.run();
-                        let font = run.font();
-                        let font_size = run.font_size();
-                        let coords = run.normalized_coords();
-
-                        guard
-                            .scene
-                            .draw_glyphs(font)
-                            .brush(&brush)
-                            .hint(false)
-                            .transform(kurbo::Affine::translate((cmd.x as f64, cmd.y as f64)))
-                            .font_size(font_size)
-                            .normalized_coords(coords)
-                            .draw(
-                                Fill::NonZero,
-                                glyph_run.glyphs().map(|glyph| {
-                                    let gx = glyph_x + glyph.x;
-                                    let gy = glyph_y - glyph.y;
-                                    glyph_x += glyph.advance;
-                                    vello::Glyph {
-                                        id: glyph.id,
-                                        x: gx,
-                                        y: gy,
-                                    }
-                                }),
-                            );
-                    }
+                unsafe {
+                    text::draw_text(
+                        &mut *scene_ptr,
+                        &mut *text_cx_ptr,
+                        text,
+                        cmd.x,
+                        cmd.y,
+                        cmd.font_size,
+                        cmd.wrap_width,
+                        color,
+                        scale,
+                    );
                 }
             }
             2 => {
                 // PushClip
-                use kurbo::Rect;
-                let clip_rect = Rect::new(
+                let clip_rect = peniko::kurbo::Rect::new(
                     cmd.x as f64,
                     cmd.y as f64,
                     (cmd.x + cmd.width) as f64,
                     (cmd.y + cmd.height) as f64,
                 );
-                guard.scene.push_layer(vello::peniko::BlendMode::default(), 1.0, kurbo::Affine::IDENTITY, &clip_rect);
+                unsafe {
+                    (*scene_ptr).push_layer(vello::peniko::BlendMode::default(), 1.0, peniko::kurbo::Affine::IDENTITY, &clip_rect);
+                }
             }
             3 => {
                 // PopClip
-                guard.scene.pop_layer();
+                unsafe {
+                    (*scene_ptr).pop_layer();
+                }
             }
             _ => {}
         }
@@ -926,14 +484,7 @@ pub extern "C" fn mcore_end_frame_present(ctx: *mut McoreContext, clear: McoreRg
     let ctx = unsafe { ctx.as_mut() }.unwrap();
     let mut guard = ctx.0.lock();
 
-    // Animate clear color based on time
-    let t = guard.time_s as f32;
-    let clear_color = Color::new([
-        (clear.r + 0.05 * (t).sin()).clamp(0.0, 1.0),
-        (clear.g + 0.05 * (t * 1.3).sin()).clamp(0.0, 1.0),
-        (clear.b + 0.05 * (t * 1.7).sin()).clamp(0.0, 1.0),
-        clear.a,
-    ]);
+    let clear_color = Color::new([clear.r, clear.g, clear.b, clear.a]);
 
     // Clone the scene to avoid borrow conflict
     let scene = guard.scene.clone();

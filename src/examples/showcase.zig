@@ -30,7 +30,16 @@ pub fn main() !void {
 
 fn onFrame(ui: *zello.UI, time: f64) void {
     ui.beginFrame();
-    defer ui.endFrame(.{ 0.1, 0.1, 0.15, 1.0 }) catch {};
+
+    // Animated clear color for visual effect (showcase only!)
+    const t: f32 = @floatCast(time);
+    const clear_color = [4]f32{
+        @max(0.0, @min(1.0, 0.1 + 0.05 * @sin(t))),
+        @max(0.0, @min(1.0, 0.1 + 0.05 * @sin(t * 1.3))),
+        @max(0.0, @min(1.0, 0.15 + 0.05 * @sin(t * 1.7))),
+        1.0,
+    };
+    defer ui.endFrame(clear_color) catch {};
 
     // Set debug bounds state
     ui.setDebugBounds(debug_bounds);
