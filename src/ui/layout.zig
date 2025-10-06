@@ -26,6 +26,16 @@ pub const Rect = struct {
     }
 };
 
+pub const Point = struct {
+    x: f32,
+    y: f32,
+};
+
+pub const Vec2 = struct {
+    x: f32,
+    y: f32,
+};
+
 pub const BoxConstraints = struct {
     min_width: f32 = 0,
     max_width: f32 = std.math.inf(f32),

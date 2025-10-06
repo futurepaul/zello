@@ -6,6 +6,7 @@ typedef void (*mv_frame_cb_t)(double t);
 typedef void (*mv_resize_cb_t)(int w, int h, float scale);
 typedef void (*mv_key_cb_t)(int key, unsigned int char_code, bool shift, bool cmd);
 typedef void (*mv_mouse_cb_t)(int event_type, float x, float y);
+typedef void (*mv_scroll_cb_t)(float delta_x, float delta_y);
 typedef void (*mv_ime_commit_cb_t)(const char* text);
 typedef void (*mv_ime_preedit_cb_t)(const char* text, int cursor_offset);
 typedef struct { float x, y, w, h; } mv_ime_rect_t;
@@ -15,6 +16,7 @@ static mv_frame_cb_t g_frame_cb = 0;
 static mv_resize_cb_t g_resize_cb = 0;
 static mv_key_cb_t g_key_cb = 0;
 static mv_mouse_cb_t g_mouse_cb = 0;
+static mv_scroll_cb_t g_scroll_cb = 0;
 static mv_ime_commit_cb_t g_ime_commit_cb = 0;
 static mv_ime_preedit_cb_t g_ime_preedit_cb = 0;
 static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
@@ -285,6 +287,19 @@ static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
     // Treat drag as move for now
     [self mouseMoved:event];
 }
+
+- (void)scrollWheel:(NSEvent *)event {
+    if (g_scroll_cb) {
+        // Use scrollingDeltaX/Y for precise trackpad/wheel scrolling
+        // These values are in points (not pixels)
+        CGFloat deltaX = event.scrollingDeltaX;
+        CGFloat deltaY = event.scrollingDeltaY;
+
+        // Apply scale factor to convert to pixel space
+        CGFloat scale = self.window.backingScaleFactor;
+        g_scroll_cb((float)(deltaX * scale), (float)(deltaY * scale));
+    }
+}
 @end
 
 @interface MVApp : NSObject
@@ -360,6 +375,10 @@ void mv_set_key_callback(mv_key_cb_t cb) {
 
 void mv_set_mouse_callback(mv_mouse_cb_t cb) {
     g_mouse_cb = cb;
+}
+
+void mv_set_scroll_callback(mv_scroll_cb_t cb) {
+    g_scroll_cb = cb;
 }
 
 void mv_set_ime_commit_callback(mv_ime_commit_cb_t cb) {

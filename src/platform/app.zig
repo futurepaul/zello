@@ -12,6 +12,7 @@ extern fn mv_set_frame_callback(cb: *const fn (t: f64) callconv(.c) void) void;
 extern fn mv_set_resize_callback(cb: *const fn (w: c_int, h: c_int, scale: f32) callconv(.c) void) void;
 extern fn mv_set_key_callback(cb: *const fn (key: c_int, char_code: c_uint, shift: bool, cmd: bool) callconv(.c) void) void;
 extern fn mv_set_mouse_callback(cb: *const fn (event_type: c_int, x: f32, y: f32) callconv(.c) void) void;
+extern fn mv_set_scroll_callback(cb: *const fn (delta_x: f32, delta_y: f32) callconv(.c) void) void;
 extern fn mv_set_ime_commit_callback(cb: *const fn (text: [*:0]const u8) callconv(.c) void) void;
 extern fn mv_set_ime_preedit_callback(cb: *const fn (text: [*:0]const u8, cursor_offset: c_int) callconv(.c) void) void;
 extern fn mv_set_ime_cursor_rect_callback(cb: *const fn () callconv(.c) ImeRect) void;
@@ -102,6 +103,7 @@ pub fn init(
     mv_set_resize_callback(on_resize);
     mv_set_key_callback(on_key);
     mv_set_mouse_callback(on_mouse);
+    mv_set_scroll_callback(on_scroll);
     mv_set_ime_commit_callback(on_ime_commit);
     mv_set_ime_preedit_callback(on_ime_preedit);
     mv_set_ime_cursor_rect_callback(on_ime_cursor_rect);
@@ -224,6 +226,10 @@ fn on_mouse(event_type: c_int, x: f32, y: f32) callconv(.c) void {
     } else if (event_type == MOUSE_MOVED) {
         g_ui.handleMouseMove(x, y);
     }
+}
+
+fn on_scroll(delta_x: f32, delta_y: f32) callconv(.c) void {
+    g_ui.handleScroll(delta_x, delta_y);
 }
 
 fn on_ime_commit(text: [*:0]const u8) callconv(.c) void {

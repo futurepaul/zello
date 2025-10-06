@@ -5,6 +5,7 @@ const commands_mod = @import("commands.zig");
 const a11y_mod = @import("a11y.zig");
 const layout_mod = @import("layout.zig");
 const flex_mod = @import("flex.zig");
+const scroll_mod = @import("widgets/scroll_area.zig");
 const c_api = @import("../renderer/c_api.zig");
 const c = c_api.c;
 
@@ -36,8 +37,14 @@ pub const UI = struct {
     // Text input widgets (keyed by ID)
     text_inputs: std.AutoHashMap(u64, TextInputWidget),
 
+    // Scroll areas (keyed by ID, persist across frames)
+    scroll_areas_state: std.AutoHashMap(u64, scroll_mod.ScrollArea),
+
     // Track buttons that were clicked this frame (filled during rendering)
     clicked_buttons: std.AutoHashMap(u64, void),
+
+    // Track scroll areas for wheel events (filled during rendering)
+    scroll_areas: std.ArrayList(ScrollAreaWidget),
 
     // Debug visualization
     debug_bounds: bool = false,
@@ -56,7 +63,9 @@ pub const UI = struct {
             .height = height,
             .clickable_widgets = std.ArrayList(ClickableWidget){},
             .text_inputs = std.AutoHashMap(u64, TextInputWidget).init(allocator),
+            .scroll_areas_state = std.AutoHashMap(u64, scroll_mod.ScrollArea).init(allocator),
             .clicked_buttons = std.AutoHashMap(u64, void).init(allocator),
+            .scroll_areas = std.ArrayList(ScrollAreaWidget){},
             .allocator = allocator,
         };
     }
@@ -69,13 +78,23 @@ pub const UI = struct {
         self.layout_stack.deinit(self.allocator);
         self.clickable_widgets.deinit(self.allocator);
         self.text_inputs.deinit();
+
+        // Clean up scroll areas
+        var it = self.scroll_areas_state.valueIterator();
+        while (it.next()) |scroll_area| {
+            scroll_area.deinit();
+        }
+        self.scroll_areas_state.deinit();
+
         self.clicked_buttons.deinit();
+        self.scroll_areas.deinit(self.allocator);
     }
 
     pub fn beginFrame(self: *UI) void {
         self.commands.reset();
         self.focus.beginFrame();
         self.clickable_widgets.clearRetainingCapacity();
+        self.scroll_areas.clearRetainingCapacity();
         // Note: Don't clear clicked_buttons here! They need to persist from
         // the previous frame's rendering to this frame's button() calls
 
@@ -178,6 +197,22 @@ pub const UI = struct {
                         return;
                     }
                 }
+            }
+        }
+    }
+
+    pub fn handleScroll(self: *UI, delta_x: f32, delta_y: f32) void {
+        const WHEEL_MULTIPLIER: f32 = 10.0;
+
+        // Find scroll area under mouse cursor
+        for (self.scroll_areas.items) |*scroll_widget| {
+            if (scroll_widget.bounds.contains(self.mouse_x, self.mouse_y)) {
+                // Apply scroll with multiplier
+                scroll_widget.scroll_area.scroll_by(.{
+                    .x = delta_x * WHEEL_MULTIPLIER,
+                    .y = delta_y * WHEEL_MULTIPLIER,
+                });
+                return;
             }
         }
     }
@@ -309,6 +344,75 @@ pub const UI = struct {
         }
     }
 
+    pub fn beginScrollArea(self: *UI, opts: ScrollAreaOptions) !void {
+        // Generate ID for the scroll area (use id from opts or auto-generate)
+        const id_str = opts.id orelse "scroll_area";
+        try self.id_system.pushID(id_str);
+        const id = self.id_system.getCurrentID();
+        self.id_system.popID();
+
+        // Get or create scroll area state
+        const gop = try self.scroll_areas_state.getOrPut(id);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = scroll_mod.ScrollArea.init(self.allocator, .{
+                .constrain_horizontal = opts.constrain_horizontal,
+                .constrain_vertical = opts.constrain_vertical,
+                .must_fill = opts.must_fill,
+            });
+        }
+
+        try self.layout_stack.append(self.allocator, .{
+            .kind = .ScrollArea,
+            .gap = 0,
+            .padding = 0,
+            .width = opts.width,
+            .height = opts.height,
+            .children = std.ArrayList(WidgetData){},
+            .x = 0,
+            .y = 0,
+            .scroll_area = gop.value_ptr.*,
+            .scroll_area_id = id,
+        });
+    }
+
+    pub fn endScrollArea(self: *UI) void {
+        if (self.layout_stack.items.len == 0) {
+            @panic("endScrollArea called without matching beginScrollArea!");
+        }
+
+        var frame = self.layout_stack.pop() orelse unreachable;
+        if (frame.kind != .ScrollArea) {
+            @panic("endScrollArea called but top of stack is not ScrollArea!");
+        }
+
+        // If this is a nested layout, add it as a child to parent
+        if (self.layout_stack.items.len > 0) {
+            var parent = &self.layout_stack.items[self.layout_stack.items.len - 1];
+            parent.children.append(self.allocator, .{
+                .scroll_layout = .{
+                    .scroll_area = frame.scroll_area.?,
+                    .scroll_area_id = frame.scroll_area_id,
+                    .width = frame.width,
+                    .height = frame.height,
+                    .children = frame.children, // Transfer ownership
+                },
+            }) catch return;
+        } else {
+            // Root scroll area (unusual but supported)
+            defer frame.children.deinit(self.allocator);
+            defer frame.scroll_area.?.deinit();
+
+            self.clicked_buttons.clearRetainingCapacity();
+
+            self.layoutAndRenderScroll(frame, .{
+                .x = 0,
+                .y = 0,
+                .width = self.width,
+                .height = self.height,
+            }) catch return;
+        }
+    }
+
     // ============================================================================
     // ID Management (Manual - for advanced users)
     // ============================================================================
@@ -396,7 +500,7 @@ pub const UI = struct {
     // Layout and Rendering Engine (Deferred Tree Traversal)
     // ============================================================================
 
-    fn layoutAndRender(self: *UI, frame: LayoutFrame, bounds: layout_mod.Rect) !void {
+    fn layoutAndRender(self: *UI, frame: LayoutFrame, bounds: layout_mod.Rect) anyerror!void {
         // Draw debug bounds for the layout container itself
         if (frame.kind == .Vstack) {
             // Yellow for Vstack
@@ -445,6 +549,12 @@ pub const UI = struct {
                     const nested_size = try self.measureLayout(nested, bounds);
                     try flex.addChild(nested_size, 0);
                 },
+                .scroll_layout => |scroll_data| {
+                    // Measure scroll layout (use configured dimensions or calculated)
+                    const width = scroll_data.width orelse bounds.width;
+                    const height = scroll_data.height orelse bounds.height;
+                    try flex.addChild(.{ .width = width, .height = height }, 0);
+                },
             }
         }
 
@@ -488,8 +598,133 @@ pub const UI = struct {
                         .height = rect.height,
                     });
                 },
+                .scroll_layout => |scroll_data| {
+                    // Recursively render nested scroll area!
+                    const scroll_frame = LayoutFrame{
+                        .kind = .ScrollArea,
+                        .gap = 0,
+                        .padding = 0,
+                        .width = scroll_data.width,
+                        .height = scroll_data.height,
+                        .children = scroll_data.children,
+                        .x = 0,
+                        .y = 0,
+                        .scroll_area = scroll_data.scroll_area,
+                        .scroll_area_id = scroll_data.scroll_area_id,
+                    };
+                    try self.layoutAndRenderScroll(scroll_frame, .{
+                        .x = abs_x,
+                        .y = abs_y,
+                        .width = rect.width,
+                        .height = rect.height,
+                    });
+                },
             }
         }
+    }
+
+    fn layoutAndRenderScroll(self: *UI, frame: LayoutFrame, bounds: layout_mod.Rect) anyerror!void {
+        _ = frame.scroll_area orelse @panic("layoutAndRenderScroll called without scroll_area!");
+
+        // Get the persistent scroll area state from the HashMap
+        const scroll_area_ptr = self.scroll_areas_state.getPtr(frame.scroll_area_id) orelse
+            @panic("Scroll area ID not found in state!");
+
+        // Register scroll area for mouse wheel events
+        try self.scroll_areas.append(self.allocator, .{
+            .scroll_area = scroll_area_ptr,
+            .bounds = bounds,
+        });
+
+        // Draw debug bounds for the scroll area container (purple for scroll areas)
+        self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, .{ 0.8, 0, 0.8, 0.6 });
+
+        // Step 1: Determine child constraints based on scroll configuration
+        const child_constraints = layout_mod.BoxConstraints{
+            .min_width = 0,
+            .min_height = 0,
+            // If constrain_horizontal = false: pass parent's max width (still finite!)
+            // If constrain_horizontal = true: pass parent's exact width
+            .max_width = if (scroll_area_ptr.constrain_horizontal) bounds.width else bounds.width,
+            // If constrain_vertical = false: pass parent's max height (still finite!)
+            // If constrain_vertical = true: pass parent's exact height
+            .max_height = if (scroll_area_ptr.constrain_vertical) bounds.height else bounds.height,
+        };
+
+        // Step 2: Measure all children recursively using the scroll area's flex container
+        var flex = scroll_area_ptr.flex;
+        flex.gap = frame.gap;
+        flex.padding = frame.padding;
+
+        for (frame.children.items) |child| {
+            switch (child) {
+                .label => |data| {
+                    const size = self.measureText(data.text, data.opts.size, child_constraints.max_width);
+                    try flex.addChild(.{
+                        .width = size.width + data.opts.padding * 2,
+                        .height = size.height + data.opts.padding * 2,
+                    }, 0);
+                },
+                .button => |data| {
+                    const padding_x: f32 = 20;
+                    const padding_y: f32 = 15;
+                    const font_size: f32 = 18;
+                    const text_size = self.measureText(data.text, font_size, 1000);
+                    const width = data.opts.width orelse (text_size.width + padding_x * 2);
+                    const height = data.opts.height orelse (text_size.height + padding_y * 2);
+                    try flex.addChild(.{ .width = width, .height = height }, 0);
+                },
+                .text_input => |data| {
+                    try flex.addChild(.{ .width = data.opts.width, .height = data.opts.height }, 0);
+                },
+                .spacer => |data| {
+                    try flex.addSpacer(data.flex);
+                },
+                .layout => |nested| {
+                    const nested_size = try self.measureLayout(nested, bounds);
+                    try flex.addChild(nested_size, 0);
+                },
+                .scroll_layout => {
+                    @panic("Nested scroll areas not yet supported!");
+                },
+            }
+        }
+
+        // Step 3: Layout children to determine content size
+        const rects = try flex.layout_children(child_constraints);
+        defer self.allocator.free(rects);
+
+        // Calculate content bounding box
+        var content_width: f32 = 0;
+        var content_height: f32 = 0;
+        for (rects) |rect| {
+            content_width = @max(content_width, rect.x + rect.width);
+            content_height = @max(content_height, rect.y + rect.height);
+        }
+
+        // Step 4: Update scroll area's content_size and viewport_size
+        scroll_area_ptr.content_size = .{ .width = content_width, .height = content_height };
+        scroll_area_ptr.viewport_size = .{ .width = bounds.width, .height = bounds.height };
+
+        // Step 5: Clamp viewport position to valid range
+        scroll_area_ptr.clamp_viewport_pos();
+
+        // Step 6: Push clip rect to viewport bounds
+        try self.commands.pushClip(bounds.x, bounds.y, bounds.width, bounds.height);
+
+        // Step 7: Render each child with scroll offset applied
+        const scroll_offset = scroll_area_ptr.get_scroll_offset();
+
+        for (frame.children.items, rects) |child, rect| {
+            // Apply scroll offset to position
+            const abs_x = bounds.x + rect.x + scroll_offset.x;
+            const abs_y = bounds.y + rect.y + scroll_offset.y;
+
+            try self.renderWidget(child, abs_x, abs_y, rect.width, rect.height);
+        }
+
+        // Step 8: Pop clip rect
+        try self.commands.popClip();
     }
 
     fn measureLayout(self: *UI, layout_data: anytype, parent_bounds: layout_mod.Rect) !layout_mod.Size {
@@ -532,6 +767,12 @@ pub const UI = struct {
                     const nested_size = try self.measureLayout(nested, parent_bounds);
                     try flex.addChild(nested_size, 0);
                 },
+                .scroll_layout => |scroll_data| {
+                    // Measure scroll layout
+                    const width = scroll_data.width orelse parent_bounds.width;
+                    const height = scroll_data.height orelse parent_bounds.height;
+                    try flex.addChild(.{ .width = width, .height = height }, 0);
+                },
             }
         }
 
@@ -561,6 +802,61 @@ pub const UI = struct {
             .width = layout_data.width orelse calculated_width,
             .height = layout_data.height orelse calculated_height,
         };
+    }
+
+    fn renderWidget(self: *UI, widget: WidgetData, x: f32, y: f32, width: f32, height: f32) anyerror!void {
+        switch (widget) {
+            .label => |data| {
+                try self.renderLabel(data.text, data.opts, x, y, width, height);
+            },
+            .button => |data| {
+                try self.renderButton(data.id, data.text, data.opts, x, y, width, height);
+            },
+            .text_input => |data| {
+                try self.renderTextInput(data.id, data.id_str, data.buffer, data.opts, x, y);
+            },
+            .spacer => {}, // Spacers don't render
+            .layout => |nested| {
+                // Recursively render nested layout!
+                const nested_frame = LayoutFrame{
+                    .kind = nested.kind,
+                    .gap = nested.gap,
+                    .padding = nested.padding,
+                    .width = nested.width,
+                    .height = nested.height,
+                    .children = nested.children,
+                    .x = 0,
+                    .y = 0,
+                };
+                try self.layoutAndRender(nested_frame, .{
+                    .x = x,
+                    .y = y,
+                    .width = width,
+                    .height = height,
+                });
+            },
+            .scroll_layout => |scroll_data| {
+                // Recursively render nested scroll area!
+                const scroll_frame = LayoutFrame{
+                    .kind = .ScrollArea,
+                    .gap = 0,
+                    .padding = 0,
+                    .width = scroll_data.width,
+                    .height = scroll_data.height,
+                    .children = scroll_data.children,
+                    .x = 0,
+                    .y = 0,
+                    .scroll_area = scroll_data.scroll_area,
+                    .scroll_area_id = scroll_data.scroll_area_id,
+                };
+                try self.layoutAndRenderScroll(scroll_frame, .{
+                    .x = x,
+                    .y = y,
+                    .width = width,
+                    .height = height,
+                });
+            },
+        }
     }
 
     fn renderLabel(self: *UI, text: [:0]const u8, opts: LabelOptions, x: f32, y: f32, width: f32, height: f32) !void {
@@ -768,7 +1064,7 @@ pub const UI = struct {
 // ============================================================================
 
 // Shared enum for layout direction
-const LayoutKind = enum { Vstack, Hstack };
+const LayoutKind = enum { Vstack, Hstack, ScrollArea };
 
 // Widget data stored during declaration phase
 const WidgetData = union(enum) {
@@ -798,6 +1094,13 @@ const WidgetData = union(enum) {
         height: ?f32,
         children: std.ArrayList(WidgetData),
     },
+    scroll_layout: struct {
+        scroll_area: scroll_mod.ScrollArea,
+        scroll_area_id: u64,
+        width: ?f32,
+        height: ?f32,
+        children: std.ArrayList(WidgetData),
+    },
 };
 
 const LayoutFrame = struct {
@@ -809,11 +1112,20 @@ const LayoutFrame = struct {
     children: std.ArrayList(WidgetData), // Store children instead of immediate rendering
     x: f32,
     y: f32,
+
+    // ScrollArea-specific state
+    scroll_area: ?scroll_mod.ScrollArea = null,
+    scroll_area_id: u64 = 0,
 };
 
 const ClickableWidget = struct {
     id: u64,
     kind: enum { Button, TextInput },
+    bounds: layout_mod.Rect,
+};
+
+const ScrollAreaWidget = struct {
+    scroll_area: *scroll_mod.ScrollArea,
     bounds: layout_mod.Rect,
 };
 
@@ -1060,4 +1372,13 @@ pub const HstackOptions = struct {
     padding: f32 = 0,
     width: ?f32 = null,  // Optional fixed width
     height: ?f32 = null, // Optional fixed height
+};
+
+pub const ScrollAreaOptions = struct {
+    constrain_horizontal: bool = false,
+    constrain_vertical: bool = false,
+    must_fill: bool = false,
+    width: ?f32 = null,
+    height: ?f32 = null,
+    id: ?[]const u8 = null, // Optional ID for the scroll area
 };
