@@ -204,15 +204,18 @@ pub const UI = struct {
     pub fn handleScroll(self: *UI, delta_x: f32, delta_y: f32) void {
         const WHEEL_MULTIPLIER: f32 = 10.0;
 
-        // Find scroll area under mouse cursor
-        for (self.scroll_areas.items) |*scroll_widget| {
+        // Find scroll area under mouse cursor (check in reverse order - topmost first)
+        var i: usize = self.scroll_areas.items.len;
+        while (i > 0) {
+            i -= 1;
+            const scroll_widget = &self.scroll_areas.items[i];
             if (scroll_widget.bounds.contains(self.mouse_x, self.mouse_y)) {
                 // Apply scroll with multiplier
                 scroll_widget.scroll_area.scroll_by(.{
                     .x = delta_x * WHEEL_MULTIPLIER,
                     .y = delta_y * WHEEL_MULTIPLIER,
                 });
-                return;
+                return; // Only scroll the topmost scroll area under cursor
             }
         }
     }
@@ -635,6 +638,9 @@ pub const UI = struct {
             .scroll_area = scroll_area_ptr,
             .bounds = bounds,
         });
+
+        // Draw background for scroll area (darker gray to distinguish it)
+        try self.commands.roundedRect(bounds.x, bounds.y, bounds.width, bounds.height, 4, .{ 0.18, 0.18, 0.22, 1.0 });
 
         // Draw debug bounds for the scroll area container (purple for scroll areas)
         self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, .{ 0.8, 0, 0.8, 0.6 });

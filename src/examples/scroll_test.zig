@@ -19,7 +19,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.beginVstack(.{ .gap = 20, .padding = 20 }) catch return;
 
     ui.label("Scroll Area Demo", .{ .size = 24 }) catch {};
-    ui.label("Scroll with mouse wheel inside the purple box below:", .{}) catch {};
+    ui.label("Scroll with mouse wheel inside the gray box below:", .{}) catch {};
 
     // Scroll area with lots of content
     ui.beginScrollArea(.{
@@ -27,14 +27,14 @@ fn onFrame(ui: *zello.UI, time: f64) void {
         .height = 300, // Fixed height viewport
     }) catch return;
 
-    ui.beginVstack(.{ .gap = 10, .padding = 15 }) catch return;
+    ui.beginVstack(.{ .gap = 5, .padding = 15 }) catch return;
 
     // Add lots of items to demonstrate scrolling
     var i: usize = 0;
+    var buf: [64]u8 = undefined; // Move buffer outside loop
     while (i < 50) : (i += 1) {
-        var buf: [64]u8 = undefined;
         const text = std.fmt.bufPrintZ(&buf, "Scrollable Item #{d}", .{i + 1}) catch "Item";
-        ui.label(text, .{}) catch {};
+        ui.label(text, .{ .bg_color = .{ 0.2, 0.2, 0.25, 1.0 } }) catch {};
     }
 
     ui.endVstack();
