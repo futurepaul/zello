@@ -23,6 +23,13 @@ pub const ScrollArea = struct {
     // Flex container for child content
     flex: flex_mod.FlexContainer,
 
+    // Momentum scrolling (Phase 2)
+    scroll_momentum: Vec2 = .{ .x = 0, .y = 0 },
+    scroll_origin: Point = .{ .x = 0, .y = 0 },
+    pointer_origin: Point = .{ .x = 0, .y = 0 },
+    drag_active: bool = false,
+    drag_time: f32 = 0,
+
     pub fn init(allocator: std.mem.Allocator, opts: ScrollAreaOptions) ScrollArea {
         return .{
             .constrain_horizontal = opts.constrain_horizontal,
@@ -53,11 +60,86 @@ pub const ScrollArea = struct {
         self.clamp_viewport_pos();
     }
 
-    /// Scroll by delta (in pixels)
+    /// Scroll by delta (in pixels), canceling any momentum
     pub fn scroll_by(self: *ScrollArea, delta: Vec2) void {
         self.viewport_pos.x += delta.x;
         self.viewport_pos.y += delta.y;
         self.clamp_viewport_pos();
+
+        // Cancel momentum when manually scrolling with wheel
+        self.scroll_momentum = Vec2{ .x = 0, .y = 0 };
+    }
+
+    /// Scroll by delta with momentum (used for momentum scrolling)
+    pub fn scroll_by_momentum(self: *ScrollArea, delta: Vec2) void {
+        self.viewport_pos.x += delta.x;
+        self.viewport_pos.y += delta.y;
+        self.clamp_viewport_pos();
+    }
+
+    /// Update momentum scrolling (call each frame)
+    pub fn update_momentum(self: *ScrollArea, dt: f32) void {
+        _ = dt;
+        const MOMENTUM_DECAY: f32 = 0.95;
+        const MOMENTUM_THRESHOLD: f32 = 0.1;
+
+        // Apply momentum
+        self.viewport_pos.x += self.scroll_momentum.x;
+        self.scroll_momentum.x *= MOMENTUM_DECAY;
+        if (@abs(self.scroll_momentum.x) < MOMENTUM_THRESHOLD) {
+            self.scroll_momentum.x = 0;
+        }
+
+        self.viewport_pos.y += self.scroll_momentum.y;
+        self.scroll_momentum.y *= MOMENTUM_DECAY;
+        if (@abs(self.scroll_momentum.y) < MOMENTUM_THRESHOLD) {
+            self.scroll_momentum.y = 0;
+        }
+
+        // Clamp to valid range
+        self.clamp_viewport_pos();
+    }
+
+    /// Start a drag operation
+    pub fn start_drag(self: *ScrollArea, pointer_pos: Point) void {
+        self.drag_active = true;
+        self.pointer_origin = pointer_pos;
+        self.scroll_origin = self.viewport_pos;
+        self.scroll_momentum = Vec2{ .x = 0, .y = 0 }; // Cancel existing momentum
+        self.drag_time = 0;
+    }
+
+    /// Update drag position
+    pub fn update_drag(self: *ScrollArea, pointer_pos: Point, dt: f32) void {
+        if (!self.drag_active) return;
+
+        const delta_x = pointer_pos.x - self.pointer_origin.x;
+        const delta_y = pointer_pos.y - self.pointer_origin.y;
+
+        self.viewport_pos.x = self.scroll_origin.x - delta_x; // Invert for natural drag
+        self.viewport_pos.y = self.scroll_origin.y - delta_y;
+        self.clamp_viewport_pos();
+        self.drag_time += dt;
+    }
+
+    /// End drag and calculate momentum
+    pub fn end_drag(self: *ScrollArea) void {
+        if (!self.drag_active) return;
+
+        const MIN_DRAG_DISTANCE: f32 = 10.0;
+        const MOMENTUM_DAMPING: f32 = 25.0;
+
+        const distance_x = self.viewport_pos.x - self.scroll_origin.x;
+        const distance_y = self.viewport_pos.y - self.scroll_origin.y;
+
+        // Only apply momentum if dragged far enough
+        if (@abs(distance_x) > MIN_DRAG_DISTANCE or @abs(distance_y) > MIN_DRAG_DISTANCE) {
+            const time_factor = @max(0.016, self.drag_time); // Min 1 frame
+            self.scroll_momentum.x = distance_x / (time_factor * MOMENTUM_DAMPING);
+            self.scroll_momentum.y = distance_y / (time_factor * MOMENTUM_DAMPING);
+        }
+
+        self.drag_active = false;
     }
 
     /// Get scroll offset as Vec2 (for translation)

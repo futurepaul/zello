@@ -297,7 +297,7 @@ static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
         NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
 
         // Use scrollingDeltaX/Y for precise trackpad/wheel scrolling
-        // These values are in points (not pixels)
+        // These values are in points (not pixels) and include native macOS momentum
         CGFloat deltaX = event.scrollingDeltaX;
         CGFloat deltaY = event.scrollingDeltaY;
 
@@ -309,6 +309,7 @@ static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
             g_mouse_cb(2, (float)(p.x * scale), (float)(p.y * scale)); // 2 = mouse moved
         }
 
+        // Pass the deltas directly - macOS already handles momentum/acceleration
         g_scroll_cb((float)(deltaX * scale), (float)(deltaY * scale));
     }
 }

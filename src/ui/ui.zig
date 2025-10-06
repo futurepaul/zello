@@ -202,7 +202,10 @@ pub const UI = struct {
     }
 
     pub fn handleScroll(self: *UI, delta_x: f32, delta_y: f32) void {
-        const WHEEL_MULTIPLIER: f32 = 10.0;
+        // macOS provides scrollingDeltaX/Y which already includes:
+        // - Acceleration (faster scroll when you scroll faster)
+        // - Momentum (continues after you lift fingers on trackpad)
+        // We just apply it directly, no need for our own multiplier!
 
         // Find scroll area under mouse cursor (check in reverse order - topmost first)
         var i: usize = self.scroll_areas.items.len;
@@ -210,10 +213,10 @@ pub const UI = struct {
             i -= 1;
             const scroll_widget = &self.scroll_areas.items[i];
             if (scroll_widget.bounds.contains(self.mouse_x, self.mouse_y)) {
-                // Apply scroll with multiplier
-                scroll_widget.scroll_area.scroll_by(.{
-                    .x = delta_x * WHEEL_MULTIPLIER,
-                    .y = delta_y * WHEEL_MULTIPLIER,
+                // Apply scroll directly - macOS deltas already feel native
+                scroll_widget.scroll_area.scroll_by_momentum(.{
+                    .x = -delta_x, // Invert for natural scrolling
+                    .y = -delta_y,
                 });
                 return; // Only scroll the topmost scroll area under cursor
             }
