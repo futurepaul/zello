@@ -42,6 +42,9 @@ static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
     CAMetalLayer *layer = (CAMetalLayer*)self.layer;
     layer.pixelFormat = MTLPixelFormatRGBA8Unorm;
     layer.opaque = YES;
+
+    // Make this view the first responder immediately
+    [self.window makeFirstResponder:self];
 }
 - (void)layout {
     [super layout];
