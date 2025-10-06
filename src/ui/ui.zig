@@ -645,10 +645,10 @@ pub const UI = struct {
         });
 
         // Draw background for scroll area (darker gray to distinguish it)
-        try self.commands.roundedRect(bounds.x, bounds.y, bounds.width, bounds.height, 4, .{ 0.18, 0.18, 0.22, 1.0 });
+        try self.commands.roundedRect(bounds.x, bounds.y, bounds.width, bounds.height, 4, color_mod.rgba(0.18, 0.18, 0.22, 1.0));
 
         // Draw debug bounds for the scroll area container (purple for scroll areas)
-        self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, .{ 0.8, 0, 0.8, 0.6 });
+        self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, color_mod.rgba(0.8, 0, 0.8, 0.6));
 
         // Step 1: Determine child constraints based on scroll configuration
         const child_constraints = layout_mod.BoxConstraints{

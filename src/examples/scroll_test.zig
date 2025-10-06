@@ -1,5 +1,6 @@
 const std = @import("std");
 const zello = @import("../zello.zig");
+const color = @import("../ui/color.zig");
 
 // Static buffers for item labels (persists across frames)
 var item_labels: [50][64:0]u8 = undefined;
@@ -25,7 +26,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     }
 
     ui.beginFrame();
-    defer ui.endFrame(.{ 0.1, 0.1, 0.15, 1.0 }) catch {};
+    defer ui.endFrame(color.rgba(0.1, 0.1, 0.15, 1.0)) catch {};
 
     // Main layout
     ui.beginVstack(.{ .gap = 20, .padding = 20 }) catch return;
@@ -44,7 +45,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     // Add lots of items to demonstrate scrolling
     for (0..50) |i| {
         const text: [:0]const u8 = std.mem.sliceTo(&item_labels[i], 0);
-        ui.label(text, .{ .bg_color = .{ 0.2, 0.2, 0.25, 1.0 } }) catch {};
+        ui.label(text, .{ .bg_color = color.rgba(0.2, 0.2, 0.25, 1.0) }) catch {};
     }
 
     ui.endVstack();
