@@ -4,6 +4,9 @@ use std::ffi::{c_void, CStr};
 use std::sync::Arc;
 use vello::Scene;
 
+// Import color types for CSS parsing and interpolation
+use peniko::color::{AlphaColor, Srgb, Oklab, DynamicColor};
+
 mod gfx;
 mod text;
 mod text_input;
@@ -126,6 +129,33 @@ pub struct McoreDrawCommand {
     pub wrap_width: f32,
     pub font_id: i32,
     pub _padding: [u8; 12],
+}
+
+// ============================================================================
+// Color Support (using color crate for proper color handling)
+// ============================================================================
+
+/// Color type - just an RGBA tuple
+/// Same layout as peniko::Color which is an array [r, g, b, a]
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct McoreColor {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+impl From<McoreColor> for Color {
+    fn from(c: McoreColor) -> Self {
+        Color::new([c.r, c.g, c.b, c.a])
+    }
+}
+
+impl From<Color> for McoreColor {
+    fn from(c: Color) -> Self {
+        Self { r: c.components[0], g: c.components[1], b: c.components[2], a: c.components[3] }
+    }
 }
 
 
@@ -1116,4 +1146,99 @@ pub extern "C" fn mcore_a11y_set_action_callback(
     callback: extern "C" fn(u64, u8),
 ) {
     a11y::set_action_callback(callback);
+}
+
+// ============================================================================
+// Color Functions
+// ============================================================================
+
+/// Parse a CSS color string into McoreColor
+/// Supports: oklch(), rgb(), rgba(), hex (#rrggbb), named colors, hsl(), lab(), lch(), etc.
+/// Returns 1 on success, 0 on parse error
+#[no_mangle]
+pub extern "C" fn mcore_color_parse(
+    css_str: *const u8,
+    len: usize,
+    out: *mut McoreColor,
+) -> u8 {
+    let css_bytes = unsafe { std::slice::from_raw_parts(css_str, len) };
+    let css_str = match std::str::from_utf8(css_bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    // Parse using color crate's CSS parser
+    let parsed: DynamicColor = match css_str.parse() {
+        Ok(c) => c,
+        Err(_) => return 0,
+    };
+
+    // Convert to sRGB as AlphaColor
+    let srgb: AlphaColor<Srgb> = parsed.to_alpha_color();
+
+    // Extract components
+    unsafe {
+        (*out).r = srgb.components[0];
+        (*out).g = srgb.components[1];
+        (*out).b = srgb.components[2];
+        (*out).a = srgb.components[3];
+    }
+    1
+}
+
+/// Interpolate between two colors using perceptually-correct Oklab space
+/// This produces much better results than naive RGB interpolation
+#[no_mangle]
+pub extern "C" fn mcore_color_lerp(
+    a: *const McoreColor,
+    b: *const McoreColor,
+    t: f32,
+    out: *mut McoreColor,
+) {
+    let a = unsafe { &*a };
+    let b = unsafe { &*b };
+
+    // Create AlphaColor<Srgb> from components
+    let a_srgb = AlphaColor::<Srgb> {
+        components: [a.r, a.g, a.b, a.a],
+        cs: std::marker::PhantomData,
+    };
+    let b_srgb = AlphaColor::<Srgb> {
+        components: [b.r, b.g, b.b, b.a],
+        cs: std::marker::PhantomData,
+    };
+
+    // Convert to Oklab for perceptually-correct interpolation
+    let a_oklab: AlphaColor<Oklab> = a_srgb.convert();
+    let b_oklab: AlphaColor<Oklab> = b_srgb.convert();
+
+    // Lerp in Oklab space (rectangular interpolation)
+    let result = a_oklab.lerp_rect(b_oklab, t);
+
+    // Convert back to sRGB
+    let result_srgb: AlphaColor<Srgb> = result.convert();
+
+    unsafe {
+        (*out).r = result_srgb.components[0];
+        (*out).g = result_srgb.components[1];
+        (*out).b = result_srgb.components[2];
+        (*out).a = result_srgb.components[3];
+    }
+}
+
+/// Convert from RGBA8 (0-255) to McoreColor (0.0-1.0)
+#[no_mangle]
+pub extern "C" fn mcore_color_from_rgba8(
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+    out: *mut McoreColor,
+) {
+    unsafe {
+        (*out).r = r as f32 / 255.0;
+        (*out).g = g as f32 / 255.0;
+        (*out).b = b as f32 / 255.0;
+        (*out).a = a as f32 / 255.0;
+    }
 }

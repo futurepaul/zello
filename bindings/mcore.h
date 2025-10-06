@@ -206,6 +206,39 @@ void mcore_a11y_update(
 // Action codes: 0 = Focus, 1 = Click
 void mcore_a11y_set_action_callback(void (*callback)(unsigned long long, unsigned char));
 
+// ============================================================================
+// Color Support
+// ============================================================================
+
+// Color type (matches Rust color::AlphaColor<Srgb>)
+// Same memory layout as [4]f32 (r, g, b, a)
+typedef struct {
+    float r;
+    float g;
+    float b;
+    float a;
+} mcore_color_t;
+
+// Parse a CSS color string into mcore_color_t
+// Supports: oklch(), rgb(), rgba(), hex (#rrggbb), named colors, hsl(), lab(), lch(), etc.
+// Returns 1 on success, 0 on parse error
+// Examples:
+//   "oklch(0.623 0.214 259.815)"
+//   "#ff0000"
+//   "rgb(255 0 0)"
+//   "rgba(255, 0, 0, 0.5)"
+//   "hsl(120 100% 50%)"
+//   "red"
+unsigned char mcore_color_parse(const unsigned char* css_str, size_t len, mcore_color_t* out);
+
+// Interpolate between two colors using perceptually-correct Oklab space
+// This produces much better gradients than naive RGB interpolation
+// t should be in range [0.0, 1.0]
+void mcore_color_lerp(const mcore_color_t* a, const mcore_color_t* b, float t, mcore_color_t* out);
+
+// Convert from RGBA8 (0-255) to mcore_color_t (0.0-1.0)
+void mcore_color_from_rgba8(unsigned char r, unsigned char g, unsigned char b, unsigned char a, mcore_color_t* out);
+
 #ifdef __cplusplus
 }
 #endif

@@ -8,6 +8,8 @@ const flex_mod = @import("flex.zig");
 const scroll_mod = @import("widgets/scroll_area.zig");
 const c_api = @import("../renderer/c_api.zig");
 const c = c_api.c;
+const color_mod = @import("color.zig");
+const Color = color_mod.Color;
 
 /// Main UI context - holds all state for immediate-mode UI
 pub const UI = struct {
@@ -102,7 +104,7 @@ pub const UI = struct {
         self.a11y_builder = a11y_mod.TreeBuilder.init(self.allocator, 1);
     }
 
-    pub fn endFrame(self: *UI, clear_color: [4]f32) !void {
+    pub fn endFrame(self: *UI, clear_color: Color) !void {
         // Submit draw commands
         const cmds = self.commands.getCommands();
         c.mcore_render_commands(self.ctx, @ptrCast(cmds.ptr), @intCast(cmds.count));
@@ -114,7 +116,7 @@ pub const UI = struct {
         try self.a11y_builder.update(self.ctx);
 
         // Present
-        const clear = c.mcore_rgba_t{ .r = clear_color[0], .g = clear_color[1], .b = clear_color[2], .a = clear_color[3] };
+        const clear = c.mcore_rgba_t{ .r = clear_color.r, .g = clear_color.g, .b = clear_color.b, .a = clear_color.a };
         const st = c.mcore_end_frame_present(self.ctx, clear);
         if (st != c.MCORE_OK) {
             const err = c.mcore_last_error();
@@ -510,10 +512,10 @@ pub const UI = struct {
         // Draw debug bounds for the layout container itself
         if (frame.kind == .Vstack) {
             // Yellow for Vstack
-            self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, .{ 1, 1, 0, 0.6 });
+            self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, color_mod.rgba(1, 1, 0, 0.6));
         } else {
             // Orange for Hstack
-            self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, .{ 1, 0.5, 0, 0.6 });
+            self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, color_mod.rgba(1, 0.5, 0, 0.6));
         }
 
         // Step 1: Measure all children recursively
@@ -881,7 +883,7 @@ pub const UI = struct {
         try self.commands.text(text, text_x, text_y, opts.size, text_width, opts.color);
 
         // Debug bounds (cyan for labels)
-        self.drawDebugRect(x, y, width, height, .{ 0, 1, 1, 0.8 });
+        self.drawDebugRect(x, y, width, height, color_mod.rgba(0, 1, 1, 0.8));
     }
 
     fn renderButton(self: *UI, id: u64, label_text: [:0]const u8, _: ButtonOptions, x: f32, y: f32, width: f32, height: f32) !void {
@@ -896,13 +898,13 @@ pub const UI = struct {
 
         // Draw background with visual states
         const bg_color = if (is_pressed)
-            [4]f32{ 0.5, 0.6, 0.9, 1.0 }
+            color_mod.rgba(0.5, 0.6, 0.9, 1.0)
         else if (is_focused)
-            [4]f32{ 0.4, 0.5, 0.8, 1.0 }
+            color_mod.rgba(0.4, 0.5, 0.8, 1.0)
         else if (is_hovered)
-            [4]f32{ 0.35, 0.35, 0.45, 1.0 }
+            color_mod.rgba(0.35, 0.35, 0.45, 1.0)
         else
-            [4]f32{ 0.3, 0.3, 0.4, 1.0 };
+            color_mod.rgba(0.3, 0.3, 0.4, 1.0);
 
         try self.commands.roundedRect(x, y, width, height, 8, bg_color);
 
@@ -911,7 +913,7 @@ pub const UI = struct {
         const text_size = self.measureText(label_text, font_size, 1000);
         const text_x = x + (width - text_size.width) / 2.0;
         const text_y = y + (height - text_size.height) / 2.0;
-        try self.commands.text(label_text, text_x, text_y, font_size, text_size.width, .{ 1, 1, 1, 1 });
+        try self.commands.text(label_text, text_x, text_y, font_size, text_size.width, color_mod.WHITE);
 
         // Track for hit testing
         try self.clickable_widgets.append(self.allocator, .{
@@ -927,7 +929,7 @@ pub const UI = struct {
         }
 
         // Debug bounds (green for buttons)
-        self.drawDebugRect(x, y, width, height, .{ 0, 1, 0, 0.9 });
+        self.drawDebugRect(x, y, width, height, color_mod.rgba(0, 1, 0, 0.9));
 
         // Add to accessibility tree
         var a11y_node = a11y_mod.Node.init(self.allocator, id, .Button, .{
@@ -994,7 +996,7 @@ pub const UI = struct {
         }
 
         // Debug bounds (magenta for text inputs)
-        self.drawDebugRect(x, y, opts.width, opts.height, .{ 1, 0, 1, 0.9 });
+        self.drawDebugRect(x, y, opts.width, opts.height, color_mod.rgba(1, 0, 1, 0.9));
     }
 
     // ============================================================================
@@ -1052,19 +1054,19 @@ pub const UI = struct {
         return in_bounds;
     }
 
-    fn drawDebugRect(self: *UI, x: f32, y: f32, w: f32, h: f32, color: [4]f32) void {
+    fn drawDebugRect(self: *UI, x: f32, y: f32, w: f32, h: f32, col: Color) void {
         if (!self.debug_bounds) return;
 
         const line_width: f32 = 2;
         // Draw 4 edges as thin rectangles to create an outline
         // Top edge
-        self.commands.roundedRect(x, y, w, line_width, 0, color) catch {};
+        self.commands.roundedRect(x, y, w, line_width, 0, col) catch {};
         // Bottom edge
-        self.commands.roundedRect(x, y + h - line_width, w, line_width, 0, color) catch {};
+        self.commands.roundedRect(x, y + h - line_width, w, line_width, 0, col) catch {};
         // Left edge
-        self.commands.roundedRect(x, y, line_width, h, 0, color) catch {};
+        self.commands.roundedRect(x, y, line_width, h, 0, col) catch {};
         // Right edge
-        self.commands.roundedRect(x + w - line_width, y, line_width, h, 0, color) catch {};
+        self.commands.roundedRect(x + w - line_width, y, line_width, h, 0, col) catch {};
     }
 };
 
@@ -1176,15 +1178,15 @@ const TextInputWidget = struct {
 
         // Draw background
         const bg_color = if (is_focused)
-            [4]f32{ 0.3, 0.3, 0.4, 1.0 }
+            color_mod.rgba(0.3, 0.3, 0.4, 1.0)
         else
-            [4]f32{ 0.2, 0.2, 0.3, 1.0 };
+            color_mod.rgba(0.2, 0.2, 0.3, 1.0);
 
         cmd_buffer.roundedRect(x, y, self.width, self.height, 4, bg_color) catch {};
 
         // Draw border if focused
         if (is_focused) {
-            const border_color = [4]f32{ 0.5, 0.7, 1.0, 1.0 };
+            const border_color = color_mod.rgba(0.5, 0.7, 1.0, 1.0);
             cmd_buffer.roundedRect(x - 2, y - 2, self.width + 4, self.height + 4, 6, border_color) catch {};
             cmd_buffer.roundedRect(x, y, self.width, self.height, 4, bg_color) catch {};
         }
@@ -1229,12 +1231,12 @@ const TextInputWidget = struct {
             const highlight_x = x + PADDING_X + sel_start_x - self.scroll_offset;
             const highlight_width = sel_end_x - sel_start_x;
 
-            const selection_color = [4]f32{ 0.3, 0.5, 0.8, 0.5 };
+            const selection_color = color_mod.rgba(0.3, 0.5, 0.8, 0.5);
             cmd_buffer.roundedRect(highlight_x, text_y, highlight_width, text_size.height, 2, selection_color) catch {};
         }
 
         // Draw text
-        const text_color = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
+        const text_color = color_mod.WHITE;
         const text_x = x + PADDING_X - self.scroll_offset;
         cmd_buffer.text(text_ptr, text_x, text_y, 16, max_width_no_wrap, text_color) catch {};
 
@@ -1243,7 +1245,7 @@ const TextInputWidget = struct {
             const cursor_pos = c.mcore_text_input_cursor(ctx, id);
             const cursor_offset_x = c.mcore_measure_text_to_byte_offset(ctx, text_ptr, 16, cursor_pos);
             const cursor_x = x + PADDING_X + cursor_offset_x - self.scroll_offset;
-            const cursor_color = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
+            const cursor_color = color_mod.WHITE;
             cmd_buffer.roundedRect(cursor_x, text_y, 2, text_size.height, 1, cursor_color) catch {};
         }
 
@@ -1353,8 +1355,8 @@ fn findByteOffsetAtX(ctx: *c.mcore_context_t, text: [*:0]const u8, font_size: f3
 
 pub const LabelOptions = struct {
     size: f32 = 16,
-    color: [4]f32 = .{ 1, 1, 1, 1 },
-    bg_color: ?[4]f32 = null, // null = no background
+    color: Color = color_mod.rgba(1, 1, 1, 1),
+    bg_color: ?Color = null, // null = no background
     padding: f32 = 8,
 };
 

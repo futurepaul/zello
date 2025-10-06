@@ -1,4 +1,6 @@
 const std = @import("std");
+const color_mod = @import("color.zig");
+const Color = color_mod.Color;
 
 pub const DrawCommandKind = enum(u8) {
     RoundedRect = 0,
@@ -15,7 +17,7 @@ pub const DrawCommand = extern struct {
     width: f32,
     height: f32,
     radius: f32, // For rounded rect
-    color: [4]f32,
+    color: [4]f32, // Still stored as array internally for FFI compatibility
     text_ptr: ?[*:0]const u8, // For text (null-terminated)
     font_size: f32,
     wrap_width: f32,
@@ -44,7 +46,7 @@ pub const CommandBuffer = struct {
         self.count = 0;
     }
 
-    pub fn roundedRect(self: *CommandBuffer, x: f32, y: f32, w: f32, h: f32, r: f32, color: [4]f32) !void {
+    pub fn roundedRect(self: *CommandBuffer, x: f32, y: f32, w: f32, h: f32, r: f32, col: Color) !void {
         if (self.count >= self.commands.len) return error.BufferFull;
 
         self.commands[self.count] = .{
@@ -54,7 +56,7 @@ pub const CommandBuffer = struct {
             .width = w,
             .height = h,
             .radius = r,
-            .color = color,
+            .color = .{ col.r, col.g, col.b, col.a },
             .text_ptr = null,
             .font_size = 0,
             .wrap_width = 0,
@@ -63,7 +65,7 @@ pub const CommandBuffer = struct {
         self.count += 1;
     }
 
-    pub fn text(self: *CommandBuffer, str: [*:0]const u8, x: f32, y: f32, font_size: f32, wrap_width: f32, color: [4]f32) !void {
+    pub fn text(self: *CommandBuffer, str: [*:0]const u8, x: f32, y: f32, font_size: f32, wrap_width: f32, col: Color) !void {
         if (self.count >= self.commands.len) return error.BufferFull;
 
         self.commands[self.count] = .{
@@ -73,7 +75,7 @@ pub const CommandBuffer = struct {
             .width = 0,
             .height = 0,
             .radius = 0,
-            .color = color,
+            .color = .{ col.r, col.g, col.b, col.a },
             .text_ptr = str,
             .font_size = font_size,
             .wrap_width = wrap_width,
