@@ -1,6 +1,10 @@
 const std = @import("std");
 const zello = @import("../zello.zig");
 
+// Static buffers for item labels (persists across frames)
+var item_labels: [50][64:0]u8 = undefined;
+var labels_initialized: bool = false;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -11,6 +15,14 @@ pub fn main() !void {
 
 fn onFrame(ui: *zello.UI, time: f64) void {
     _ = time;
+
+    // Initialize labels once
+    if (!labels_initialized) {
+        for (0..50) |i| {
+            _ = std.fmt.bufPrintZ(&item_labels[i], "Scrollable Item #{d}", .{i + 1}) catch {};
+        }
+        labels_initialized = true;
+    }
 
     ui.beginFrame();
     defer ui.endFrame(.{ 0.1, 0.1, 0.15, 1.0 }) catch {};
@@ -30,10 +42,8 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.beginVstack(.{ .gap = 5, .padding = 15 }) catch return;
 
     // Add lots of items to demonstrate scrolling
-    var i: usize = 0;
-    var buf: [64]u8 = undefined; // Move buffer outside loop
-    while (i < 50) : (i += 1) {
-        const text = std.fmt.bufPrintZ(&buf, "Scrollable Item #{d}", .{i + 1}) catch "Item";
+    for (0..50) |i| {
+        const text: [:0]const u8 = std.mem.sliceTo(&item_labels[i], 0);
         ui.label(text, .{ .bg_color = .{ 0.2, 0.2, 0.25, 1.0 } }) catch {};
     }
 
