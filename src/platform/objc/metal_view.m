@@ -293,6 +293,9 @@ static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
 
 - (void)scrollWheel:(NSEvent *)event {
     if (g_scroll_cb) {
+        // Get current mouse position
+        NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+
         // Use scrollingDeltaX/Y for precise trackpad/wheel scrolling
         // These values are in points (not pixels)
         CGFloat deltaX = event.scrollingDeltaX;
@@ -300,6 +303,12 @@ static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
 
         // Apply scale factor to convert to pixel space
         CGFloat scale = self.window.backingScaleFactor;
+
+        // Update mouse position first
+        if (g_mouse_cb) {
+            g_mouse_cb(2, (float)(p.x * scale), (float)(p.y * scale)); // 2 = mouse moved
+        }
+
         g_scroll_cb((float)(deltaX * scale), (float)(deltaY * scale));
     }
 }
