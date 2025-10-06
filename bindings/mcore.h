@@ -65,17 +65,33 @@ typedef struct {
 typedef enum {
   MCORE_DRAW_CMD_ROUNDED_RECT = 0,
   MCORE_DRAW_CMD_TEXT = 1,
+  MCORE_DRAW_CMD_PUSH_CLIP = 2,
+  MCORE_DRAW_CMD_POP_CLIP = 3,
+  MCORE_DRAW_CMD_STYLED_RECT = 4,
 } mcore_draw_cmd_kind_t;
 
 typedef struct {
   mcore_draw_cmd_kind_t kind;
   float x, y, width, height, radius;
-  float color[4];
+  float color[4];  // Fill color (or text color)
   const char* text_ptr;
   float font_size;
   float wrap_width;
   int font_id;
-  unsigned char _padding[12];
+
+  // Border fields
+  float border_width;
+  float border_color[4];
+  unsigned char has_border;  // 0 or 1
+
+  // Shadow fields
+  float shadow_offset_x;
+  float shadow_offset_y;
+  float shadow_blur;
+  float shadow_color[4];
+  unsigned char has_shadow;  // 0 or 1
+
+  unsigned char _padding[2];
 } mcore_draw_command_t;
 
 typedef enum { MCORE_OK = 0, MCORE_ERR = 1 } mcore_status_t;

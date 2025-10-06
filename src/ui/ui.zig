@@ -886,7 +886,7 @@ pub const UI = struct {
         self.drawDebugRect(x, y, width, height, color_mod.rgba(0, 1, 1, 0.8));
     }
 
-    fn renderButton(self: *UI, id: u64, label_text: [:0]const u8, _: ButtonOptions, x: f32, y: f32, width: f32, height: f32) !void {
+    fn renderButton(self: *UI, id: u64, label_text: [:0]const u8, opts: ButtonOptions, x: f32, y: f32, width: f32, height: f32) !void {
         // Register as focusable
         try self.focus.registerFocusable(id);
         const is_focused = self.focus.isFocused(id);
@@ -896,24 +896,40 @@ pub const UI = struct {
         const is_hovered = bounds.contains(self.mouse_x, self.mouse_y);
         const is_pressed = is_hovered and self.mouse_down;
 
-        // Draw background with visual states
-        const bg_color = if (is_pressed)
-            color_mod.rgba(0.5, 0.6, 0.9, 1.0)
-        else if (is_focused)
-            color_mod.rgba(0.4, 0.5, 0.8, 1.0)
-        else if (is_hovered)
-            color_mod.rgba(0.35, 0.35, 0.45, 1.0)
-        else
-            color_mod.rgba(0.3, 0.3, 0.4, 1.0);
+        // Determine background color (use custom or defaults with visual states)
+        const base_bg = opts.bg_color orelse color_mod.BLACK;
+        const hover_bg = opts.hover_color orelse color_mod.lerp(base_bg, color_mod.WHITE, 0.2);
+        const active_bg = opts.active_color orelse color_mod.lerp(base_bg, color_mod.WHITE, 0.3);
 
-        try self.commands.roundedRect(x, y, width, height, 8, bg_color);
+        const bg_color = if (is_pressed)
+            active_bg
+        else if (is_hovered)
+            hover_bg
+        else if (is_focused)
+            color_mod.lerp(base_bg, color_mod.WHITE, 0.15) // Slightly lighter when focused
+        else
+            base_bg;
+
+        // Draw styled rect (with optional border and shadow)
+        try self.commands.styledRect(
+            x,
+            y,
+            width,
+            height,
+            opts.radius,
+            bg_color,
+            opts.border_color,
+            opts.border_width,
+            opts.shadow,
+        );
 
         // Draw text (centered)
         const font_size: f32 = 18;
         const text_size = self.measureText(label_text, font_size, 1000);
         const text_x = x + (width - text_size.width) / 2.0;
         const text_y = y + (height - text_size.height) / 2.0;
-        try self.commands.text(label_text, text_x, text_y, font_size, text_size.width, color_mod.WHITE);
+        const text_color = opts.text_color orelse color_mod.WHITE;
+        try self.commands.text(label_text, text_x, text_y, font_size, text_size.width, text_color);
 
         // Track for hit testing
         try self.clickable_widgets.append(self.allocator, .{
@@ -1364,6 +1380,16 @@ pub const ButtonOptions = struct {
     width: ?f32 = null,
     height: ?f32 = null,
     id: ?[]const u8 = null, // Override auto-ID
+
+    // Style properties
+    bg_color: ?Color = null, // Background color (null = use default)
+    hover_color: ?Color = null, // Hover state color (null = auto-lighten)
+    active_color: ?Color = null, // Pressed state color (null = auto-darken)
+    text_color: ?Color = null, // Text color (null = white)
+    border_color: ?Color = null, // Border color (null = no border)
+    border_width: f32 = 1,
+    radius: f32 = 8,
+    shadow: ?color_mod.Shadow = null, // Drop shadow (null = no shadow)
 };
 
 pub const TextInputOptions = struct {
@@ -1374,14 +1400,14 @@ pub const TextInputOptions = struct {
 pub const VstackOptions = struct {
     gap: f32 = 0,
     padding: f32 = 0,
-    width: ?f32 = null,  // Optional fixed width
+    width: ?f32 = null, // Optional fixed width
     height: ?f32 = null, // Optional fixed height
 };
 
 pub const HstackOptions = struct {
     gap: f32 = 0,
     padding: f32 = 0,
-    width: ?f32 = null,  // Optional fixed width
+    width: ?f32 = null, // Optional fixed width
     height: ?f32 = null, // Optional fixed height
 };
 

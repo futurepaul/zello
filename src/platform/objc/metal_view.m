@@ -45,6 +45,14 @@ static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
 
     // Make this view the first responder immediately
     [self.window makeFirstResponder:self];
+
+    // Add tracking area for continuous mouse move events
+    NSTrackingArea *trackingArea = [[NSTrackingArea alloc]
+        initWithRect:self.bounds
+        options:(NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect | NSTrackingMouseMoved)
+        owner:self
+        userInfo:nil];
+    [self addTrackingArea:trackingArea];
 }
 - (void)layout {
     [super layout];

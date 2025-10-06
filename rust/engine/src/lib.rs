@@ -128,7 +128,20 @@ pub struct McoreDrawCommand {
     pub font_size: f32,
     pub wrap_width: f32,
     pub font_id: i32,
-    pub _padding: [u8; 12],
+
+    // Border fields
+    pub border_width: f32,
+    pub border_color: [f32; 4],
+    pub has_border: u8,
+
+    // Shadow fields
+    pub shadow_offset_x: f32,
+    pub shadow_offset_y: f32,
+    pub shadow_blur: f32,
+    pub shadow_color: [f32; 4],
+    pub has_shadow: u8,
+
+    pub _padding: [u8; 2],
 }
 
 // ============================================================================
@@ -502,6 +515,72 @@ pub extern "C" fn mcore_render_commands(
                 // PopClip
                 unsafe {
                     (*scene_ptr).pop_layer();
+                }
+            }
+            4 => {
+                // StyledRect (with optional border and shadow)
+                let shape = peniko::kurbo::RoundedRect::new(
+                    cmd.x as f64,
+                    cmd.y as f64,
+                    (cmd.x + cmd.width) as f64,
+                    (cmd.y + cmd.height) as f64,
+                    cmd.radius as f64,
+                );
+
+                unsafe {
+                    // 1. Draw shadow if present (using Vello's blurred rect)
+                    if cmd.has_shadow != 0 {
+                        let shadow_rect = peniko::kurbo::Rect::new(
+                            (cmd.x + cmd.shadow_offset_x) as f64,
+                            (cmd.y + cmd.shadow_offset_y) as f64,
+                            (cmd.x + cmd.width + cmd.shadow_offset_x) as f64,
+                            (cmd.y + cmd.height + cmd.shadow_offset_y) as f64,
+                        );
+                        let shadow_color = Color::new([
+                            cmd.shadow_color[0],
+                            cmd.shadow_color[1],
+                            cmd.shadow_color[2],
+                            cmd.shadow_color[3],
+                        ]);
+
+                        // Use draw_blurred_rounded_rect for drop shadow effect
+                        // Signature: (transform, rect, color, blur_radius, corner_radius)
+                        (*scene_ptr).draw_blurred_rounded_rect(
+                            peniko::kurbo::Affine::IDENTITY,
+                            shadow_rect,
+                            shadow_color,
+                            cmd.shadow_blur as f64,
+                            cmd.radius as f64,
+                        );
+                    }
+
+                    // 2. Draw fill
+                    let fill_color = Color::new([cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]]);
+                    (*scene_ptr).fill(
+                        vello::peniko::Fill::NonZero,
+                        peniko::kurbo::Affine::IDENTITY,
+                        fill_color,
+                        None,
+                        &shape,
+                    );
+
+                    // 3. Draw border if present (using stroke)
+                    if cmd.has_border != 0 && cmd.border_width > 0.0 {
+                        let border_color = Color::new([
+                            cmd.border_color[0],
+                            cmd.border_color[1],
+                            cmd.border_color[2],
+                            cmd.border_color[3],
+                        ]);
+                        let stroke = peniko::kurbo::Stroke::new(cmd.border_width as f64);
+                        (*scene_ptr).stroke(
+                            &stroke,
+                            peniko::kurbo::Affine::IDENTITY,
+                            border_color,
+                            None,
+                            &shape,
+                        );
+                    }
                 }
             }
             _ => {}

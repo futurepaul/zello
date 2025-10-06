@@ -73,3 +73,21 @@ pub const RED = rgba(1, 0, 0, 1);
 pub const GREEN = rgba(0, 1, 0, 1);
 pub const BLUE = rgba(0, 0, 1, 1);
 pub const TRANSPARENT = rgba(0, 0, 0, 0);
+
+/// Drop shadow configuration
+pub const Shadow = struct {
+    offset_x: f32,
+    offset_y: f32,
+    blur_radius: f32,
+    color: Color,
+
+    /// Create a shadow
+    pub fn init(offset_x: f32, offset_y: f32, blur_radius: f32, color: Color) Shadow {
+        return .{
+            .offset_x = offset_x,
+            .offset_y = offset_y,
+            .blur_radius = blur_radius,
+            .color = color,
+        };
+    }
+};
