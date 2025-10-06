@@ -372,7 +372,7 @@ pub const UI = struct {
         try self.layout_stack.append(self.allocator, .{
             .kind = .ScrollArea,
             .gap = 0,
-            .padding = 0,
+            .padding = opts.padding,
             .width = opts.width,
             .height = opts.height,
             .children = std.ArrayList(WidgetData){},
@@ -380,6 +380,8 @@ pub const UI = struct {
             .y = 0,
             .scroll_area = gop.value_ptr.*,
             .scroll_area_id = id,
+            .scroll_bg_color = opts.bg_color,
+            .scroll_padding = opts.padding,
         });
     }
 
@@ -402,6 +404,8 @@ pub const UI = struct {
                     .scroll_area_id = frame.scroll_area_id,
                     .width = frame.width,
                     .height = frame.height,
+                    .bg_color = frame.scroll_bg_color,
+                    .padding = frame.scroll_padding,
                     .children = frame.children, // Transfer ownership
                 },
             }) catch return;
@@ -611,7 +615,7 @@ pub const UI = struct {
                     const scroll_frame = LayoutFrame{
                         .kind = .ScrollArea,
                         .gap = 0,
-                        .padding = 0,
+                        .padding = scroll_data.padding,
                         .width = scroll_data.width,
                         .height = scroll_data.height,
                         .children = scroll_data.children,
@@ -619,6 +623,8 @@ pub const UI = struct {
                         .y = 0,
                         .scroll_area = scroll_data.scroll_area,
                         .scroll_area_id = scroll_data.scroll_area_id,
+                        .scroll_bg_color = scroll_data.bg_color,
+                        .scroll_padding = scroll_data.padding,
                     };
                     try self.layoutAndRenderScroll(scroll_frame, .{
                         .x = abs_x,
@@ -644,8 +650,10 @@ pub const UI = struct {
             .bounds = bounds,
         });
 
-        // Draw background for scroll area (darker gray to distinguish it)
-        try self.commands.roundedRect(bounds.x, bounds.y, bounds.width, bounds.height, 4, color_mod.rgba(0.18, 0.18, 0.22, 1.0));
+        // Draw background for scroll area if specified
+        if (frame.scroll_bg_color) |bg_color| {
+            try self.commands.roundedRect(bounds.x, bounds.y, bounds.width, bounds.height, 4, bg_color);
+        }
 
         // Draw debug bounds for the scroll area container (purple for scroll areas)
         self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, color_mod.rgba(0.8, 0, 0.8, 0.6));
@@ -1126,6 +1134,8 @@ const WidgetData = union(enum) {
         scroll_area_id: u64,
         width: ?f32,
         height: ?f32,
+        bg_color: ?Color,
+        padding: f32,
         children: std.ArrayList(WidgetData),
     },
 };
@@ -1143,6 +1153,8 @@ const LayoutFrame = struct {
     // ScrollArea-specific state
     scroll_area: ?scroll_mod.ScrollArea = null,
     scroll_area_id: u64 = 0,
+    scroll_bg_color: ?Color = null,
+    scroll_padding: f32 = 0,
 };
 
 const ClickableWidget = struct {
@@ -1418,4 +1430,6 @@ pub const ScrollAreaOptions = struct {
     width: ?f32 = null,
     height: ?f32 = null,
     id: ?[]const u8 = null, // Optional ID for the scroll area
+    bg_color: ?Color = null, // Background color (null = transparent)
+    padding: f32 = 0, // Inner padding for scroll content
 };

@@ -38,9 +38,11 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.beginScrollArea(.{
         .constrain_vertical = false, // Allow content to be taller than viewport
         .height = 300, // Fixed height viewport
+        .bg_color = color.rgba(0.18, 0.18, 0.22, 1.0), // Darker background
+        .padding = 10,
     }) catch return;
 
-    ui.beginVstack(.{ .gap = 5, .padding = 15 }) catch return;
+    ui.beginVstack(.{ .gap = 5 }) catch return;
 
     // Add lots of items to demonstrate scrolling
     for (0..50) |i| {
