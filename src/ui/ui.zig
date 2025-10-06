@@ -213,6 +213,8 @@ pub const UI = struct {
             .kind = .Vstack,
             .gap = opts.gap,
             .padding = opts.padding,
+            .width = opts.width,
+            .height = opts.height,
             .children = std.ArrayList(WidgetData){},
             .x = 0,
             .y = 0,
@@ -234,6 +236,8 @@ pub const UI = struct {
                     .kind = .Vstack,
                     .gap = frame.gap,
                     .padding = frame.padding,
+                    .width = frame.width,
+                    .height = frame.height,
                     .children = frame.children, // Transfer ownership
                 },
             }) catch return;
@@ -260,6 +264,8 @@ pub const UI = struct {
             .kind = .Hstack,
             .gap = opts.gap,
             .padding = opts.padding,
+            .width = opts.width,
+            .height = opts.height,
             .children = std.ArrayList(WidgetData){},
             .x = 0,
             .y = 0,
@@ -281,6 +287,8 @@ pub const UI = struct {
                     .kind = .Hstack,
                     .gap = frame.gap,
                     .padding = frame.padding,
+                    .width = frame.width,
+                    .height = frame.height,
                     .children = frame.children, // Transfer ownership
                 },
             }) catch return;
@@ -467,6 +475,8 @@ pub const UI = struct {
                         .kind = nested.kind,
                         .gap = nested.gap,
                         .padding = nested.padding,
+                        .width = nested.width,
+                        .height = nested.height,
                         .children = nested.children,
                         .x = 0,
                         .y = 0,
@@ -543,9 +553,13 @@ pub const UI = struct {
             max_y = @max(max_y, rect.y + rect.height);
         }
 
+        // Use fixed dimensions if specified, otherwise calculate from children
+        const calculated_width = if (rects.len > 0) (max_x - min_x) else layout_data.padding * 2;
+        const calculated_height = if (rects.len > 0) (max_y - min_y) else layout_data.padding * 2;
+
         return .{
-            .width = if (rects.len > 0) (max_x - min_x) else layout_data.padding * 2,
-            .height = if (rects.len > 0) (max_y - min_y) else layout_data.padding * 2,
+            .width = layout_data.width orelse calculated_width,
+            .height = layout_data.height orelse calculated_height,
         };
     }
 
@@ -780,6 +794,8 @@ const WidgetData = union(enum) {
         kind: LayoutKind,
         gap: f32,
         padding: f32,
+        width: ?f32,
+        height: ?f32,
         children: std.ArrayList(WidgetData),
     },
 };
@@ -788,6 +804,8 @@ const LayoutFrame = struct {
     kind: LayoutKind,
     gap: f32,
     padding: f32,
+    width: ?f32,
+    height: ?f32,
     children: std.ArrayList(WidgetData), // Store children instead of immediate rendering
     x: f32,
     y: f32,
@@ -1033,9 +1051,13 @@ pub const TextInputOptions = struct {
 pub const VstackOptions = struct {
     gap: f32 = 0,
     padding: f32 = 0,
+    width: ?f32 = null,  // Optional fixed width
+    height: ?f32 = null, // Optional fixed height
 };
 
 pub const HstackOptions = struct {
     gap: f32 = 0,
     padding: f32 = 0,
+    width: ?f32 = null,  // Optional fixed width
+    height: ?f32 = null, // Optional fixed height
 };

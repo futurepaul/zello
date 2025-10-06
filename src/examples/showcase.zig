@@ -7,6 +7,9 @@ var counter: i32 = 0;
 var text_buf1: [256]u8 = undefined;
 var text_buf2: [256]u8 = undefined;
 
+// Colors
+const WHITE: [4]f32 = .{ 1, 1, 1, 1 };
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -50,9 +53,9 @@ fn onFrame(ui: *zello.UI, time: f64) void {
 
     // Section A: Colored boxes
     ui.beginVstack(.{ .gap = 8, .padding = 8 }) catch return;
-    ui.label("Red", .{ .bg_color = .{ 0.8, 0.3, 0.3, 1 }, .color = .{ 1, 1, 1, 1 }, .padding = 12 }) catch {};
-    ui.label("Green", .{ .bg_color = .{ 0.3, 0.8, 0.3, 1 }, .color = .{ 1, 1, 1, 1 }, .padding = 12 }) catch {};
-    ui.label("Blue", .{ .bg_color = .{ 0.3, 0.3, 0.8, 1 }, .color = .{ 1, 1, 1, 1 }, .padding = 12 }) catch {};
+    ui.label("Red", .{ .bg_color = .{ 0.8, 0.3, 0.3, 1 }, .color = WHITE, .padding = 12 }) catch {};
+    ui.label("Green", .{ .bg_color = .{ 0.3, 0.8, 0.3, 1 }, .color = WHITE, .padding = 12 }) catch {};
+    ui.label("Blue", .{ .bg_color = .{ 0.3, 0.3, 0.8, 1 }, .color = WHITE, .padding = 12 }) catch {};
     ui.endVstack();
 
     ui.spacer(1.0) catch {};
@@ -80,8 +83,8 @@ fn onFrame(ui: *zello.UI, time: f64) void {
 
     ui.spacer(1.0) catch {};
 
-    // Section C: Time display
-    ui.beginVstack(.{ .gap = 5, .padding = 8 }) catch return;
+    // Section C: Time display (fixed width to prevent layout shift)
+    ui.beginVstack(.{ .gap = 5, .padding = 8, .width = 100 }) catch return;
     ui.label("Time", .{ .size = 14, .color = .{ 0.7, 0.7, 0.7, 1 } }) catch {};
     var time_buf: [32]u8 = undefined;
     const time_text = std.fmt.bufPrintZ(&time_buf, "{d:.1}s", .{time}) catch "0.0s";
