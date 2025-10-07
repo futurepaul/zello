@@ -599,8 +599,17 @@ pub const UI = struct {
         }
 
         // Step 2: Calculate positions
-        // Pass full bounds to flex - it handles padding internally
-        const constraints = layout_mod.BoxConstraints.loose(bounds.width, bounds.height);
+        // Constrain ONLY cross-axis by padding (main axis is handled by flex algorithm)
+        // For vstack (vertical main axis): constrain width (cross axis)
+        // For hstack (horizontal main axis): constrain height (cross axis)
+        const cross_constrained_width = bounds.width - frame.padding * 2;
+        const cross_constrained_height = bounds.height - frame.padding * 2;
+
+        const constraints = if (frame.kind == .Vstack)
+            layout_mod.BoxConstraints.loose(cross_constrained_width, bounds.height)
+        else
+            layout_mod.BoxConstraints.loose(bounds.width, cross_constrained_height);
+
         const rects = try flex.layout_children(constraints);
         defer self.allocator.free(rects);
 
@@ -697,15 +706,20 @@ pub const UI = struct {
         self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, color_mod.rgba(0.8, 0, 0.8, 0.6));
 
         // Step 1: Determine child constraints based on scroll configuration
+        // Constrain ONLY cross-axis by padding (main axis is handled by flex algorithm)
+        const is_vertical = (scroll_area_ptr.flex.axis == .Vertical);
+        const cross_constrained_width = if (is_vertical) bounds.width - frame.padding * 2 else bounds.width;
+        const cross_constrained_height = if (!is_vertical) bounds.height - frame.padding * 2 else bounds.height;
+
         const child_constraints = layout_mod.BoxConstraints{
             .min_width = 0,
             .min_height = 0,
             // If constrain_horizontal = false: pass parent's max width (still finite!)
             // If constrain_horizontal = true: pass parent's exact width
-            .max_width = if (scroll_area_ptr.constrain_horizontal) bounds.width else bounds.width,
+            .max_width = if (scroll_area_ptr.constrain_horizontal) cross_constrained_width else cross_constrained_width,
             // If constrain_vertical = false: pass parent's max height (still finite!)
             // If constrain_vertical = true: pass parent's exact height
-            .max_height = if (scroll_area_ptr.constrain_vertical) bounds.height else bounds.height,
+            .max_height = if (scroll_area_ptr.constrain_vertical) cross_constrained_height else cross_constrained_height,
         };
 
         // Step 2: Measure all children recursively using the scroll area's flex container
@@ -713,12 +727,11 @@ pub const UI = struct {
         flex.gap = frame.gap;
         flex.padding = frame.padding;
 
-        // Calculate cross-axis constraint (accounting for padding)
-        const is_vertical = (scroll_area_ptr.flex.axis == .Vertical);
+        // Calculate cross-axis constraint (already accounted for padding above)
         const cross_axis_constraint = if (is_vertical)
-            child_constraints.max_width - frame.padding * 2
+            child_constraints.max_width
         else
-            child_constraints.max_height - frame.padding * 2;
+            child_constraints.max_height;
 
         for (frame.children.items) |child| {
             switch (child) {
@@ -854,8 +867,15 @@ pub const UI = struct {
         }
 
         // Do a layout pass to get the total size
-        // Pass full bounds to flex - it handles padding internally
-        const constraints = layout_mod.BoxConstraints.loose(parent_bounds.width, parent_bounds.height);
+        // Constrain ONLY cross-axis by padding (main axis is handled by flex algorithm)
+        const cross_constrained_width = parent_bounds.width - layout_data.padding * 2;
+        const cross_constrained_height = parent_bounds.height - layout_data.padding * 2;
+
+        const constraints = if (layout_data.kind == .Vstack)
+            layout_mod.BoxConstraints.loose(cross_constrained_width, parent_bounds.height)
+        else
+            layout_mod.BoxConstraints.loose(parent_bounds.width, cross_constrained_height);
+
         const rects = try flex.layout_children(constraints);
         defer self.allocator.free(rects);
 
