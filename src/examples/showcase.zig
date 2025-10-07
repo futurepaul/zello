@@ -3,6 +3,7 @@ const zello = @import("../zello.zig");
 const color = @import("../ui/color.zig");
 const Color = color.Color;
 const Shadow = color.Shadow;
+const custom_badge = @import("../ui/widgets/custom_widget_example.zig");
 
 // App state
 var debug_bounds: bool = false;
@@ -209,7 +210,45 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.endHstack();
 
     // ============================================================================
-    // SECTION 7: Feature Summary
+    // SECTION 7: Custom Widget Demo
+    // ============================================================================
+    ui.label("Demo 5: Custom Widget (Extensibility API)", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
+
+    ui.beginHstack(.{ .gap = 10, .padding = 10 }) catch return;
+
+    // Create custom badge widgets (stack-allocated, no heap!)
+    var badge1 = custom_badge.BadgeData{
+        .text = "NEW",
+        .bg_color = color.rgba(0.9, 0.2, 0.2, 1),
+        .text_color = WHITE,
+        .padding = 8,
+    };
+    ui.customWidget(&custom_badge.Interface, &badge1) catch {};
+
+    var badge2 = custom_badge.BadgeData{
+        .text = "BETA",
+        .bg_color = color.rgba(0.2, 0.6, 0.9, 1),
+        .text_color = WHITE,
+        .padding = 8,
+    };
+    ui.customWidget(&custom_badge.Interface, &badge2) catch {};
+
+    var badge3 = custom_badge.BadgeData{
+        .text = "PRO",
+        .bg_color = color.rgba(0.6, 0.4, 0.9, 1),
+        .text_color = WHITE,
+        .padding = 8,
+    };
+    ui.customWidget(&custom_badge.Interface, &badge3) catch {};
+
+    ui.spacer(1.0) catch {};
+
+    ui.label("← Custom widgets work seamlessly!", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
+
+    ui.endHstack();
+
+    // ============================================================================
+    // SECTION 8: Feature Summary
     // ============================================================================
     ui.beginVstack(.{ .gap = 5, .padding = 10 }) catch return;
     ui.label("Features Demonstrated:", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
@@ -219,6 +258,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.label("✓ Text inputs with IME, selection, clipboard", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.label("✓ Focus management (Tab navigation)", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.label("✓ VoiceOver accessibility support", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
+    ui.label("✓ Custom widget extensibility API", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.endVstack();
 
     ui.endVstack(); // End root vstack

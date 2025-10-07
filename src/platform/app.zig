@@ -249,7 +249,7 @@ fn on_ime_preedit(text: [*:0]const u8, cursor_offset: c_int) callconv(.c) void {
 fn on_ime_cursor_rect() callconv(.c) ImeRect {
     // Update cursor position from focused text input
     if (g_ui.focus.focused_id) |fid| {
-        if (g_ui.text_inputs.get(fid)) |ti| {
+        if (g_ui.state.text_inputs.get(fid)) |ti| {
             var text_buf: [256]u8 = undefined;
             const cursor_pos = c.mcore_text_input_cursor(g_ctx, fid);
             const text_len = c.mcore_text_input_get(g_ctx, fid, &text_buf, 256);
