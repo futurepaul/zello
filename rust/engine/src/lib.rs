@@ -358,6 +358,7 @@ pub extern "C" fn mcore_measure_text(
 
     let scale = guard.gfx.scale();
 
+    // Measure with scale for quality, returns logical measurements
     let (width, height) = text::measure_text(
         &mut guard.text_cx,
         text,
@@ -461,6 +462,7 @@ pub extern "C" fn mcore_render_commands(
     let commands = unsafe { std::slice::from_raw_parts(commands, count as usize) };
     let mut guard = ctx.0.lock();
 
+    // Commands are in physical pixels, but text rendering needs scale for rasterization quality
     let scale = guard.gfx.scale();
 
     // Use raw pointers to split borrows for text rendering
@@ -470,13 +472,13 @@ pub extern "C" fn mcore_render_commands(
     for cmd in commands {
         match cmd.kind {
             0 => {
-                // RoundedRect
+                // RoundedRect - scale from logical to physical pixels
                 let shape = peniko::kurbo::RoundedRect::new(
-                    cmd.x as f64,
-                    cmd.y as f64,
-                    (cmd.x + cmd.width) as f64,
-                    (cmd.y + cmd.height) as f64,
-                    cmd.radius as f64,
+                    (cmd.x * scale) as f64,
+                    (cmd.y * scale) as f64,
+                    ((cmd.x + cmd.width) * scale) as f64,
+                    ((cmd.y + cmd.height) * scale) as f64,
+                    (cmd.radius * scale) as f64,
                 );
                 let color = Color::new([cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]]);
                 unsafe {
@@ -484,7 +486,7 @@ pub extern "C" fn mcore_render_commands(
                 }
             }
             1 => {
-                // Text
+                // Text - scale from logical to physical pixels
                 let text = unsafe { CStr::from_ptr(cmd.text_ptr) }.to_str().unwrap_or("");
                 let color = Color::new([cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]]);
 
@@ -493,8 +495,8 @@ pub extern "C" fn mcore_render_commands(
                         &mut *scene_ptr,
                         &mut *text_cx_ptr,
                         text,
-                        cmd.x,
-                        cmd.y,
+                        cmd.x * scale,
+                        cmd.y * scale,
                         cmd.font_size,
                         cmd.wrap_width,
                         color,
@@ -503,12 +505,12 @@ pub extern "C" fn mcore_render_commands(
                 }
             }
             2 => {
-                // PushClip
+                // PushClip - scale from logical to physical pixels
                 let clip_rect = peniko::kurbo::Rect::new(
-                    cmd.x as f64,
-                    cmd.y as f64,
-                    (cmd.x + cmd.width) as f64,
-                    (cmd.y + cmd.height) as f64,
+                    (cmd.x * scale) as f64,
+                    (cmd.y * scale) as f64,
+                    ((cmd.x + cmd.width) * scale) as f64,
+                    ((cmd.y + cmd.height) * scale) as f64,
                 );
                 unsafe {
                     (*scene_ptr).push_layer(vello::peniko::BlendMode::default(), 1.0, peniko::kurbo::Affine::IDENTITY, &clip_rect);
@@ -521,23 +523,23 @@ pub extern "C" fn mcore_render_commands(
                 }
             }
             4 => {
-                // StyledRect (with optional border and shadow)
+                // StyledRect (with optional border and shadow) - scale from logical to physical pixels
                 let shape = peniko::kurbo::RoundedRect::new(
-                    cmd.x as f64,
-                    cmd.y as f64,
-                    (cmd.x + cmd.width) as f64,
-                    (cmd.y + cmd.height) as f64,
-                    cmd.radius as f64,
+                    (cmd.x * scale) as f64,
+                    (cmd.y * scale) as f64,
+                    ((cmd.x + cmd.width) * scale) as f64,
+                    ((cmd.y + cmd.height) * scale) as f64,
+                    (cmd.radius * scale) as f64,
                 );
 
                 unsafe {
                     // 1. Draw shadow if present (using Vello's blurred rect)
                     if cmd.has_shadow != 0 {
                         let shadow_rect = peniko::kurbo::Rect::new(
-                            (cmd.x + cmd.shadow_offset_x) as f64,
-                            (cmd.y + cmd.shadow_offset_y) as f64,
-                            (cmd.x + cmd.width + cmd.shadow_offset_x) as f64,
-                            (cmd.y + cmd.height + cmd.shadow_offset_y) as f64,
+                            ((cmd.x + cmd.shadow_offset_x) * scale) as f64,
+                            ((cmd.y + cmd.shadow_offset_y) * scale) as f64,
+                            ((cmd.x + cmd.width + cmd.shadow_offset_x) * scale) as f64,
+                            ((cmd.y + cmd.height + cmd.shadow_offset_y) * scale) as f64,
                         );
                         let shadow_color = Color::new([
                             cmd.shadow_color[0],
@@ -552,8 +554,8 @@ pub extern "C" fn mcore_render_commands(
                             peniko::kurbo::Affine::IDENTITY,
                             shadow_rect,
                             shadow_color,
-                            cmd.shadow_blur as f64,
-                            cmd.radius as f64,
+                            (cmd.shadow_blur * scale) as f64,
+                            (cmd.radius * scale) as f64,
                         );
                     }
 
@@ -575,7 +577,7 @@ pub extern "C" fn mcore_render_commands(
                             cmd.border_color[2],
                             cmd.border_color[3],
                         ]);
-                        let stroke = peniko::kurbo::Stroke::new(cmd.border_width as f64);
+                        let stroke = peniko::kurbo::Stroke::new((cmd.border_width * scale) as f64);
                         (*scene_ptr).stroke(
                             &stroke,
                             peniko::kurbo::Affine::IDENTITY,

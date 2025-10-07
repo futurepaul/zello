@@ -272,25 +272,24 @@ static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
 - (void)mouseDown:(NSEvent *)event {
     if (g_mouse_cb) {
         NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
-        // Convert points to pixels to match rendering coordinate space
-        CGFloat scale = self.window.backingScaleFactor;
-        g_mouse_cb(0, (float)(p.x * scale), (float)(p.y * scale)); // 0 = mouse down
+        // Pass logical pixel coordinates (layout is in logical pixels)
+        g_mouse_cb(0, (float)p.x, (float)p.y); // 0 = mouse down
     }
 }
 
 - (void)mouseUp:(NSEvent *)event {
     if (g_mouse_cb) {
         NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
-        CGFloat scale = self.window.backingScaleFactor;
-        g_mouse_cb(1, (float)(p.x * scale), (float)(p.y * scale)); // 1 = mouse up
+        // Pass logical pixel coordinates (layout is in logical pixels)
+        g_mouse_cb(1, (float)p.x, (float)p.y); // 1 = mouse up
     }
 }
 
 - (void)mouseMoved:(NSEvent *)event {
     if (g_mouse_cb) {
         NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
-        CGFloat scale = self.window.backingScaleFactor;
-        g_mouse_cb(2, (float)(p.x * scale), (float)(p.y * scale)); // 2 = mouse moved
+        // Pass logical pixel coordinates (layout is in logical pixels)
+        g_mouse_cb(2, (float)p.x, (float)p.y); // 2 = mouse moved
     }
 }
 
