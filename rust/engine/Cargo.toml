@@ -19,6 +19,7 @@ parley = { git = "https://github.com/linebender/parley", rev = "38a31c0eab7dc340
 skrifa = "0.37"
 accesskit = "0.20"
 accesskit_macos = "0.21"
+image = "0.25"
 
 [build-dependencies]
 cbindgen = "0.26"

@@ -255,6 +255,67 @@ void mcore_color_lerp(const mcore_color_t* a, const mcore_color_t* b, float t, m
 // Convert from RGBA8 (0-255) to mcore_color_t (0.0-1.0)
 void mcore_color_from_rgba8(unsigned char r, unsigned char g, unsigned char b, unsigned char a, mcore_color_t* out);
 
+// ============================================================================
+// Image Management
+// ============================================================================
+
+// Image format constants
+#define MCORE_IMAGE_FORMAT_RGB8  0
+#define MCORE_IMAGE_FORMAT_RGBA8 1
+
+// Alpha type constants
+#define MCORE_IMAGE_ALPHA_OPAQUE 0  // No alpha channel
+#define MCORE_IMAGE_ALPHA_PREMUL 1  // Premultiplied alpha
+#define MCORE_IMAGE_ALPHA_ALPHA  2  // Straight alpha
+
+// Image descriptor for registration
+typedef struct {
+    const unsigned char* data;      // Pointer to pixel data (can be freed after register returns)
+    unsigned int data_len;          // Total bytes: width * height * bytes_per_pixel
+    unsigned int width;             // Image width in pixels
+    unsigned int height;            // Image height in pixels
+    unsigned char format;           // MCORE_IMAGE_FORMAT_*
+    unsigned char alpha_type;       // MCORE_IMAGE_ALPHA_*
+} mcore_image_desc_t;
+
+// Image information
+typedef struct {
+    int image_id;                   // Image ID (-1 if error)
+    unsigned int width;             // Image width in pixels
+    unsigned int height;            // Image height in pixels
+} mcore_image_info_t;
+
+// Image transform for drawing
+typedef struct {
+    float x;                // X position
+    float y;                // Y position
+    float scale;            // Uniform scale factor
+    float rotation_deg;     // Rotation in degrees (0 = no rotation)
+} mcore_image_transform_t;
+
+// Register an image and copy pixel data to Rust
+// Returns an image ID (>= 0) or -1 on error
+// The `data` pointer can be freed after this function returns
+int mcore_image_register(mcore_context_t* ctx, const mcore_image_desc_t* desc);
+
+// Increment reference count (call when widget stores image ID)
+void mcore_image_retain(mcore_context_t* ctx, int image_id);
+
+// Decrement reference count, free when 0 (call in widget deinit)
+void mcore_image_release(mcore_context_t* ctx, int image_id);
+
+// Draw an image with transform
+void mcore_image_draw(mcore_context_t* ctx, int image_id, const mcore_image_transform_t* transform);
+
+// Load and register an image from a file path (JPEG, PNG, GIF, BMP, etc.)
+// Returns image info (id, width, height). id is -1 on error.
+// The image is automatically decoded to RGBA8
+mcore_image_info_t mcore_image_load_file(mcore_context_t* ctx, const char* path);
+
+// Get image dimensions by ID
+// Returns 1 on success, 0 if image not found
+unsigned char mcore_image_get_info(mcore_context_t* ctx, int image_id, mcore_image_info_t* out);
+
 #ifdef __cplusplus
 }
 #endif

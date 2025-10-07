@@ -9,6 +9,7 @@ const scroll_mod = @import("widgets/scroll_area.zig");
 const button_widget = @import("widgets/button.zig");
 const label_widget = @import("widgets/label.zig");
 const text_input_widget = @import("widgets/text_input.zig");
+const image_widget = @import("widgets/image.zig");
 const widget_interface = @import("widget_interface.zig");
 const layout_utils = @import("layout_utils.zig");
 const state_mod = @import("core/state.zig");
@@ -115,7 +116,7 @@ pub const UI = struct {
 
     /// Create a WidgetContext for widget rendering
     /// This provides the API surface that widgets use to interact with the UI system
-    fn createWidgetContext(self: *UI) context_mod.WidgetContext {
+    pub fn createWidgetContext(self: *UI) context_mod.WidgetContext {
         return .{
             .ctx = self.ctx,
             .allocator = self.allocator,
@@ -486,6 +487,24 @@ pub const UI = struct {
         return false;
     }
 
+    /// Add an image widget to the layout
+    /// The image must be pre-loaded using loadImageFile() or registerImage()
+    pub fn image(self: *UI, image_id: i32, natural_width: f32, natural_height: f32, opts: ImageOptions) !void {
+        if (self.layout_stack.items.len == 0) {
+            @panic("image() called outside layout! Use beginVstack/beginHstack first.");
+        }
+
+        var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
+        try frame.children.append(self.allocator, .{
+            .image = .{
+                .image_id = image_id,
+                .natural_width = natural_width,
+                .natural_height = natural_height,
+                .opts = opts,
+            },
+        });
+    }
+
     /// Add a custom widget to the layout
     /// This is the extensibility point for external widgets
     ///
@@ -565,6 +584,11 @@ pub const UI = struct {
                     const size = custom_widget.measure(&widget_ctx, bounds.width);
                     try flex.addChild(size, 0);
                 },
+                .image => |data| {
+                    var widget_ctx = self.createWidgetContext();
+                    const size = image_widget.measure(&widget_ctx, data.image_id, data.natural_width, data.natural_height, data.opts);
+                    try flex.addChild(size, 0);
+                },
             }
         }
 
@@ -638,6 +662,11 @@ pub const UI = struct {
                     var widget_ctx = self.createWidgetContext();
                     try custom_widget.render(&widget_ctx, abs_x, abs_y, rect.width, rect.height);
                 },
+                .image => |data| {
+                    var widget_ctx = self.createWidgetContext();
+                    const id = 0; // Dummy ID for now since we don't need focus/interaction
+                    try image_widget.render(&widget_ctx, id, data.image_id, data.natural_width, data.natural_height, data.opts, abs_x, abs_y, rect.width, rect.height);
+                },
             }
         }
     }
@@ -707,6 +736,11 @@ pub const UI = struct {
                 .custom => |custom_widget| {
                     var widget_ctx = self.createWidgetContext();
                     const size = custom_widget.measure(&widget_ctx, child_constraints.max_width);
+                    try flex.addChild(size, 0);
+                },
+                .image => |data| {
+                    var widget_ctx = self.createWidgetContext();
+                    const size = image_widget.measure(&widget_ctx, data.image_id, data.natural_width, data.natural_height, data.opts);
                     try flex.addChild(size, 0);
                 },
             }
@@ -791,6 +825,11 @@ pub const UI = struct {
                     const size = custom_widget.measure(&widget_ctx, parent_bounds.width);
                     try flex.addChild(size, 0);
                 },
+                .image => |data| {
+                    var widget_ctx = self.createWidgetContext();
+                    const size = image_widget.measure(&widget_ctx, data.image_id, data.natural_width, data.natural_height, data.opts);
+                    try flex.addChild(size, 0);
+                },
             }
         }
 
@@ -866,6 +905,11 @@ pub const UI = struct {
             .custom => |custom_widget| {
                 var widget_ctx = self.createWidgetContext();
                 try custom_widget.render(&widget_ctx, x, y, width, height);
+            },
+            .image => |data| {
+                var widget_ctx = self.createWidgetContext();
+                const id = 0; // Dummy ID for now since we don't need focus/interaction
+                try image_widget.render(&widget_ctx, id, data.image_id, data.natural_width, data.natural_height, data.opts, x, y, width, height);
             },
         }
     }
@@ -978,6 +1022,14 @@ const WidgetData = union(enum) {
 
     // Custom widget (extensibility point for external widgets)
     custom: widget_interface.CustomWidget,
+
+    // Image widget
+    image: struct {
+        image_id: i32,
+        natural_width: f32,
+        natural_height: f32,
+        opts: ImageOptions,
+    },
 };
 
 const LayoutFrame = struct {
@@ -1021,6 +1073,15 @@ pub const ButtonOptions = button_widget.Options;
 
 // Re-export text input options for backwards compatibility
 pub const TextInputOptions = text_input_widget.Options;
+
+// Re-export image widget functions and types
+pub const ImageOptions = image_widget.Options;
+pub const ImageInfo = image_widget.ImageInfo;
+pub const loadImageFile = image_widget.loadImageFile;
+pub const registerImageRGBA8 = image_widget.registerImageRGBA8;
+pub const registerImageRGB8 = image_widget.registerImageRGB8;
+pub const releaseImage = image_widget.releaseImage;
+pub const imageById = image_widget.imageById;
 
 pub const VstackOptions = struct {
     gap: f32 = 0,

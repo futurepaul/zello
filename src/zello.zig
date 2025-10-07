@@ -40,6 +40,13 @@ pub const TextInputOptions = @import("ui/ui.zig").TextInputOptions;
 pub const VstackOptions = @import("ui/ui.zig").VstackOptions;
 pub const HstackOptions = @import("ui/ui.zig").HstackOptions;
 
+// Image widget (re-exported for convenience)
+pub const ImageOptions = @import("ui/ui.zig").ImageOptions;
+pub const ImageInfo = @import("ui/ui.zig").ImageInfo;
+pub const loadImageFile = @import("ui/ui.zig").loadImageFile;
+pub const releaseImage = @import("ui/ui.zig").releaseImage;
+pub const imageById = @import("ui/ui.zig").imageById;
+
 // Custom widget API (for extensibility)
 pub const WidgetContext = @import("ui/core/context.zig").WidgetContext;
 pub const WidgetInterface = @import("ui/widget_interface.zig").WidgetInterface;

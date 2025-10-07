@@ -11,6 +11,7 @@ mod gfx;
 mod text;
 mod text_input;
 mod a11y;
+mod image;
 
 thread_local! {
     static LAST_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
@@ -180,6 +181,7 @@ struct Engine {
     fonts: Vec<(Vec<u8>, FontData)>,
     text_inputs: text_input::TextInputManager,
     a11y: Option<a11y::AccessibilityAdapter>,
+    images: image::ImageManager,
 }
 
 #[repr(C)]
@@ -216,6 +218,7 @@ pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreConte
                         fonts: Vec::new(),
                         text_inputs: text_input::TextInputManager::new(),
                         a11y: None,
+                        images: image::ImageManager::new(),
                     };
                     Box::into_raw(Box::new(McoreContext(Arc::new(Mutex::new(eng)))))
                 }
@@ -1319,5 +1322,244 @@ pub extern "C" fn mcore_color_from_rgba8(
         (*out).g = g as f32 / 255.0;
         (*out).b = b as f32 / 255.0;
         (*out).a = a as f32 / 255.0;
+    }
+}
+
+// ============================================================================
+// Image Management FFI
+// ============================================================================
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreImageDesc {
+    pub data: *const u8,
+    pub data_len: u32,
+    pub width: u32,
+    pub height: u32,
+    pub format: u8,
+    pub alpha_type: u8,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreImageTransform {
+    pub x: f32,
+    pub y: f32,
+    pub scale: f32,
+    pub rotation_deg: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct McoreImageInfo {
+    pub image_id: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Register an image and copy pixel data to Rust
+/// Returns an image ID (>= 0) or -1 on error
+/// The `data` pointer can be freed after this function returns
+#[no_mangle]
+pub extern "C" fn mcore_image_register(
+    ctx: *mut McoreContext,
+    desc: *const McoreImageDesc,
+) -> i32 {
+    let ctx = unsafe { ctx.as_mut() };
+    let desc = unsafe { desc.as_ref() };
+
+    if ctx.is_none() || desc.is_none() {
+        set_err("Null pointer passed to mcore_image_register");
+        return -1;
+    }
+
+    let ctx = ctx.unwrap();
+    let desc = desc.unwrap();
+    let mut guard = ctx.0.lock();
+
+    // Copy pixel data from Zig memory
+    let pixels = unsafe {
+        std::slice::from_raw_parts(desc.data, desc.data_len as usize)
+    };
+
+    // Map format enum (only RGBA8 supported for now)
+    let format = match desc.format {
+        1 => vello::peniko::ImageFormat::Rgba8,
+        _ => {
+            set_err(format!("Unsupported image format: {} (only RGBA8 supported)", desc.format));
+            return -1;
+        }
+    };
+
+    // Map alpha type enum
+    let alpha_type = match desc.alpha_type {
+        2 => vello::peniko::ImageAlphaType::Alpha,
+        _ => {
+            set_err(format!("Unsupported alpha type: {} (only straight alpha supported)", desc.alpha_type));
+            return -1;
+        }
+    };
+
+    // Register image
+    match guard.images.register(pixels, desc.width, desc.height, format, alpha_type) {
+        Ok(id) => id,
+        Err(e) => {
+            set_err(e);
+            -1
+        }
+    }
+}
+
+/// Increment reference count for an image
+#[no_mangle]
+pub extern "C" fn mcore_image_retain(
+    ctx: *mut McoreContext,
+    image_id: i32,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+    if ctx.is_none() {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let mut guard = ctx.0.lock();
+
+    if let Err(e) = guard.images.retain(image_id) {
+        set_err(e);
+    }
+}
+
+/// Decrement reference count, free when 0
+#[no_mangle]
+pub extern "C" fn mcore_image_release(
+    ctx: *mut McoreContext,
+    image_id: i32,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+    if ctx.is_none() {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let mut guard = ctx.0.lock();
+
+    if let Err(e) = guard.images.release(image_id) {
+        set_err(e);
+    }
+}
+
+/// Draw an image with transform
+#[no_mangle]
+pub extern "C" fn mcore_image_draw(
+    ctx: *mut McoreContext,
+    image_id: i32,
+    transform: *const McoreImageTransform,
+) {
+    let ctx = unsafe { ctx.as_mut() };
+    let transform = unsafe { transform.as_ref() };
+
+    if ctx.is_none() || transform.is_none() {
+        return;
+    }
+
+    let ctx = ctx.unwrap();
+    let transform = transform.unwrap();
+    let mut guard = ctx.0.lock();
+
+    // Look up image
+    if let Some(image_data) = guard.images.get(image_id) {
+        // Build affine transform
+        use peniko::kurbo::Affine;
+
+        let affine = Affine::scale(transform.scale as f64)
+            .then_rotate((transform.rotation_deg as f64).to_radians())
+            .then_translate((transform.x as f64, transform.y as f64).into());
+
+        // Draw to scene (create ImageBrush from ImageData)
+        let brush = peniko::ImageBrush::from(image_data.clone());
+        guard.scene.draw_image(&brush, affine);
+    }
+}
+
+/// Load and register an image from a file path (JPEG, PNG, etc.)
+/// Returns image info (id, width, height). id is -1 on error.
+#[no_mangle]
+pub extern "C" fn mcore_image_load_file(
+    ctx: *mut McoreContext,
+    path: *const i8,
+) -> McoreImageInfo {
+    let ctx = unsafe { ctx.as_mut() };
+
+    if ctx.is_none() || path.is_null() {
+        set_err("Null pointer passed to mcore_image_load_file");
+        return McoreImageInfo {
+            image_id: -1,
+            width: 0,
+            height: 0,
+        };
+    }
+
+    let ctx = ctx.unwrap();
+    let path_str = unsafe { CStr::from_ptr(path) }
+        .to_str()
+        .unwrap_or("");
+
+    let mut guard = ctx.0.lock();
+
+    match guard.images.register_from_file(path_str) {
+        Ok(id) => {
+            // Get dimensions
+            if let Some((width, height)) = guard.images.get_dimensions(id) {
+                McoreImageInfo {
+                    image_id: id,
+                    width,
+                    height,
+                }
+            } else {
+                set_err("Failed to get image dimensions");
+                McoreImageInfo {
+                    image_id: -1,
+                    width: 0,
+                    height: 0,
+                }
+            }
+        }
+        Err(e) => {
+            set_err(e);
+            McoreImageInfo {
+                image_id: -1,
+                width: 0,
+                height: 0,
+            }
+        }
+    }
+}
+
+/// Get image dimensions by ID
+/// Returns 1 on success, 0 if image not found
+#[no_mangle]
+pub extern "C" fn mcore_image_get_info(
+    ctx: *mut McoreContext,
+    image_id: i32,
+    out: *mut McoreImageInfo,
+) -> u8 {
+    let ctx = unsafe { ctx.as_mut() };
+    let out = unsafe { out.as_mut() };
+
+    if ctx.is_none() || out.is_none() {
+        return 0;
+    }
+
+    let ctx = ctx.unwrap();
+    let out = out.unwrap();
+    let guard = ctx.0.lock();
+
+    if let Some((width, height)) = guard.images.get_dimensions(image_id) {
+        out.image_id = image_id;
+        out.width = width;
+        out.height = height;
+        1
+    } else {
+        0
     }
 }

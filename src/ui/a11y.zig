@@ -12,6 +12,7 @@ pub const Role = enum(u8) {
     TextInput = 2,
     Label = 3,
     Group = 4,
+    Image = 5,
 };
 
 /// Accessibility actions (bitfield)

@@ -248,7 +248,35 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.endHstack();
 
     // ============================================================================
-    // SECTION 8: Feature Summary
+    // SECTION 8: Image Widget Demo
+    // ============================================================================
+    ui.label("Demo 6: Image Widget (JPEG/PNG Loading)", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
+
+    ui.beginHstack(.{ .gap = 10, .padding = 10 }) catch return;
+
+    // Load the waffle dog image
+    var widget_ctx = ui.createWidgetContext();
+    const img_info = zello.loadImageFile(&widget_ctx, "src/examples/waffle_dog.jpeg") catch {
+        ui.label("Failed to load image", .{ .color = RED }) catch {};
+        ui.endHstack();
+        ui.endVstack(); // ROOT
+        return;
+    };
+    defer zello.releaseImage(&widget_ctx, img_info.id);
+
+    // Display the image at 100x100 using the proper widget system
+    const natural_w = @as(f32, @floatFromInt(img_info.width));
+    const natural_h = @as(f32, @floatFromInt(img_info.height));
+    const scale = 100.0 / natural_w;
+
+    ui.image(img_info.id, natural_w, natural_h, .{ .scale = scale }) catch {};
+
+    ui.label("← Waffle Dog! 🧇🐕", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
+
+    ui.endHstack();
+
+    // ============================================================================
+    // SECTION 9: Feature Summary
     // ============================================================================
     ui.beginVstack(.{ .gap = 5, .padding = 10 }) catch return;
     ui.label("Features Demonstrated:", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
@@ -257,6 +285,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.label("✓ Interactive buttons with borders & shadows", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.label("✓ Text inputs with IME, selection, clipboard", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.label("✓ Focus management (Tab navigation)", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
+    ui.label("✓ Image loading (JPEG, PNG, GIF, BMP, etc.)", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.label("✓ VoiceOver accessibility support", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.label("✓ Custom widget extensibility API", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.endVstack();
