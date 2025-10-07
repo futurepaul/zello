@@ -6,32 +6,23 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    var app = try zello.init(gpa.allocator(), 600, 400, "Hello Zello - Padding Test", onFrame);
+    var app = try zello.init(gpa.allocator(), 600, 400, "Hello Zello", onFrame);
     defer app.deinit();
 
     zello.run(app);
 }
 
 fn onFrame(ui: *zello.UI, time: f64) void {
-    _ = time;
     ui.beginFrame();
     defer ui.endFrame(color.WHITE) catch {};
 
-    // Enable debug bounds to see padding
-    ui.setDebugBounds(true);
+    // Simple example with some padding
+    ui.beginVstack(.{ .gap = 20, .padding = 40 }) catch return;
 
-    std.debug.print("\n=== FRAME START ===\n", .{});
-    std.debug.print("Window size: {}x{}\n", .{ ui.width, ui.height });
+    ui.label("Hello, Zello!", .{ .size = 24, .color = color.BLACK }) catch {};
 
-    // Root vstack with 60px padding to make the issue obvious
-    ui.beginVstack(.{ .gap = 20, .padding = 60 }) catch return;
-    std.debug.print("Root vstack: padding=60\n", .{});
-
-    ui.label("Root vstack with 60px padding", .{ .size = 20, .color = color.BLACK }) catch {};
-
-    // Nested hstack to test the measurement issue
+    // Nested hstack with spacers
     ui.beginHstack(.{ .gap = 10, .padding = 10 }) catch return;
-    std.debug.print("  Nested hstack: padding=10\n", .{});
 
     ui.label("Left", .{ .bg_color = color.rgba(1, 0, 0, 0.3), .color = color.BLACK }) catch {};
     ui.spacer(1.0) catch {};
@@ -41,7 +32,9 @@ fn onFrame(ui: *zello.UI, time: f64) void {
 
     ui.endHstack();
 
-    ui.label("Text should stay within yellow bounds", .{ .size = 16, .color = color.BLACK }) catch {};
+    if (ui.button("Click Me!", .{}) catch false) {
+        std.debug.print("Button clicked at {d:.2}s\n", .{time});
+    }
 
     ui.endVstack();
 }

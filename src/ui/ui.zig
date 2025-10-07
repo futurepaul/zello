@@ -583,14 +583,7 @@ pub const UI = struct {
                         .width = bounds.width - frame.padding * 2,
                         .height = bounds.height - frame.padding * 2,
                     };
-                    std.debug.print("  Measuring nested {s}, inner bounds: {}x{} (parent padding={})\n", .{
-                        @tagName(nested.kind),
-                        inner_bounds.width,
-                        inner_bounds.height,
-                        frame.padding,
-                    });
                     const nested_size = try self.measureLayout(nested, inner_bounds);
-                    std.debug.print("    -> nested measured as: {}x{}\n", .{ nested_size.width, nested_size.height });
                     try flex.addChild(nested_size, 0);
                 },
                 .scroll_layout => |scroll_data| {
