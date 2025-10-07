@@ -576,7 +576,21 @@ pub const UI = struct {
                 },
                 .layout => |nested| {
                     // Recursively measure nested layout!
-                    const nested_size = try self.measureLayout(nested, bounds);
+                    // Pass INNER bounds (with padding removed) so nested layout knows its actual space
+                    const inner_bounds = layout_mod.Rect{
+                        .x = bounds.x + frame.padding,
+                        .y = bounds.y + frame.padding,
+                        .width = bounds.width - frame.padding * 2,
+                        .height = bounds.height - frame.padding * 2,
+                    };
+                    std.debug.print("  Measuring nested {s}, inner bounds: {}x{} (parent padding={})\n", .{
+                        @tagName(nested.kind),
+                        inner_bounds.width,
+                        inner_bounds.height,
+                        frame.padding,
+                    });
+                    const nested_size = try self.measureLayout(nested, inner_bounds);
+                    std.debug.print("    -> nested measured as: {}x{}\n", .{ nested_size.width, nested_size.height });
                     try flex.addChild(nested_size, 0);
                 },
                 .scroll_layout => |scroll_data| {
@@ -754,7 +768,14 @@ pub const UI = struct {
                     try flex.addSpacer(data.flex);
                 },
                 .layout => |nested| {
-                    const nested_size = try self.measureLayout(nested, bounds);
+                    // Pass INNER bounds (with padding removed) so nested layout knows its actual space
+                    const inner_bounds = layout_mod.Rect{
+                        .x = bounds.x + frame.padding,
+                        .y = bounds.y + frame.padding,
+                        .width = bounds.width - frame.padding * 2,
+                        .height = bounds.height - frame.padding * 2,
+                    };
+                    const nested_size = try self.measureLayout(nested, inner_bounds);
                     try flex.addChild(nested_size, 0);
                 },
                 .scroll_layout => {
@@ -844,7 +865,14 @@ pub const UI = struct {
                 },
                 .layout => |nested| {
                     // Recursively measure!
-                    const nested_size = try self.measureLayout(nested, parent_bounds);
+                    // Pass INNER bounds (with padding removed) so nested layout knows its actual space
+                    const inner_bounds = layout_mod.Rect{
+                        .x = parent_bounds.x + layout_data.padding,
+                        .y = parent_bounds.y + layout_data.padding,
+                        .width = parent_bounds.width - layout_data.padding * 2,
+                        .height = parent_bounds.height - layout_data.padding * 2,
+                    };
+                    const nested_size = try self.measureLayout(nested, inner_bounds);
                     try flex.addChild(nested_size, 0);
                 },
                 .scroll_layout => |scroll_data| {
