@@ -5,6 +5,7 @@ const color = @import("../ui/color.zig");
 // Static buffers for item labels (persists across frames)
 var item_labels: [50][64:0]u8 = undefined;
 var labels_initialized: bool = false;
+var debug_bounds: bool = false;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -28,10 +29,20 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.beginFrame();
     defer ui.endFrame(color.rgba(0.1, 0.1, 0.15, 1.0)) catch {};
 
+    // Set debug bounds based on toggle
+    ui.setDebugBounds(debug_bounds);
+
     // Main layout
     ui.beginVstack(.{ .gap = 20, .padding = 20 }) catch return;
 
     ui.label("Scroll Area Demo", .{ .size = 24 }) catch {};
+
+    // Debug toggle button
+    const debug_label = if (debug_bounds) "Debug: ON" else "Debug: OFF";
+    if (ui.button(debug_label, .{}) catch false) {
+        debug_bounds = !debug_bounds;
+    }
+
     ui.label("Scroll with mouse wheel inside the gray box below:", .{}) catch {};
 
     // Scroll area with lots of content
