@@ -310,13 +310,12 @@ static mv_ime_cursor_rect_cb_t g_ime_cursor_rect_cb = 0;
 
         CGFloat scale = self.window.backingScaleFactor;
 
-        // Update mouse position first (mouse pos needs scaling)
+        // Update mouse position first (in logical pixels, consistent with other mouse events)
         if (g_mouse_cb) {
-            g_mouse_cb(2, (float)(p.x * scale), (float)(p.y * scale)); // 2 = mouse moved
+            g_mouse_cb(2, (float)p.x, (float)p.y); // 2 = mouse moved
         }
 
-        // Pass scroll deltas WITHOUT scaling - they're already in the right units
-        // (scrollingDeltaX/Y are in points, which is what we want for UI space)
+        // Pass scroll deltas in physical pixels (they will be scaled to logical in Zig)
         g_scroll_cb((float)deltaX, (float)deltaY);
     }
 }

@@ -38,13 +38,14 @@ pub const UI = struct {
     // Window properties
     width: f32,
     height: f32,
+    scale: f32,
 
     // Debug visualization
     debug_bounds: bool = false,
 
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, ctx: *c.mcore_context_t, width: f32, height: f32) !UI {
+    pub fn init(allocator: std.mem.Allocator, ctx: *c.mcore_context_t, width: f32, height: f32, scale: f32) !UI {
         return .{
             .ctx = ctx,
             .id_system = id_mod.UI.init(allocator),
@@ -56,6 +57,7 @@ pub const UI = struct {
             .layout_stack = .{},
             .width = width,
             .height = height,
+            .scale = scale,
             .allocator = allocator,
         };
     }
@@ -101,9 +103,10 @@ pub const UI = struct {
         self.interaction.endFrame();
     }
 
-    pub fn updateSize(self: *UI, width: f32, height: f32) void {
+    pub fn updateSize(self: *UI, width: f32, height: f32, scale: f32) void {
         self.width = width;
         self.height = height;
+        self.scale = scale;
     }
 
     pub fn setDebugBounds(self: *UI, enabled: bool) void {
@@ -203,7 +206,9 @@ pub const UI = struct {
         // macOS provides scrollingDeltaX/Y which already includes:
         // - Acceleration (faster scroll when you scroll faster)
         // - Momentum (continues after you lift fingers on trackpad)
-        // We just apply it directly, no need for our own multiplier!
+        // Divide by scale to convert to logical pixel space (our layout is in logical pixels)
+        const scaled_delta_x = delta_x / self.scale;
+        const scaled_delta_y = delta_y / self.scale;
 
         // Find scroll area under mouse cursor (check in reverse order - topmost first)
         var i: usize = self.interaction.scroll_areas_for_events.items.len;
@@ -211,10 +216,10 @@ pub const UI = struct {
             i -= 1;
             const scroll_widget = &self.interaction.scroll_areas_for_events.items[i];
             if (scroll_widget.bounds.contains(self.interaction.input.mouse_x, self.interaction.input.mouse_y)) {
-                // Apply scroll directly - macOS deltas already feel native
+                // Apply scroll in logical pixel space
                 scroll_widget.scroll_area.scroll_by_momentum(.{
-                    .x = -delta_x, // Invert for natural scrolling
-                    .y = -delta_y,
+                    .x = -scaled_delta_x, // Invert for natural scrolling
+                    .y = -scaled_delta_y,
                 });
                 return; // Only scroll the topmost scroll area under cursor
             }
@@ -587,9 +592,11 @@ pub const UI = struct {
                     try flex.addChild(nested_size, 0);
                 },
                 .scroll_layout => |scroll_data| {
-                    // Measure scroll layout (use configured dimensions or calculated)
-                    const width = scroll_data.width orelse bounds.width;
-                    const height = scroll_data.height orelse bounds.height;
+                    // Measure scroll layout using INNER bounds (respecting parent padding)
+                    const inner_width = bounds.width - frame.padding * 2;
+                    const inner_height = bounds.height - frame.padding * 2;
+                    const width = scroll_data.width orelse inner_width;
+                    const height = scroll_data.height orelse inner_height;
                     try flex.addChild(.{ .width = width, .height = height }, 0);
                 },
                 .custom => |custom_widget| {
@@ -713,20 +720,12 @@ pub const UI = struct {
         self.drawDebugRect(bounds.x, bounds.y, bounds.width, bounds.height, color_mod.rgba(0.8, 0, 0.8, 0.6));
 
         // Step 1: Determine child constraints based on scroll configuration
-        // Constrain ONLY cross-axis by padding (main axis is handled by flex algorithm)
-        const is_vertical = (scroll_area_ptr.flex.axis == .Vertical);
-        const cross_constrained_width = if (is_vertical) bounds.width - frame.padding * 2 else bounds.width;
-        const cross_constrained_height = if (!is_vertical) bounds.height - frame.padding * 2 else bounds.height;
-
         const child_constraints = layout_mod.BoxConstraints{
             .min_width = 0,
             .min_height = 0,
-            // If constrain_horizontal = false: pass parent's max width (still finite!)
-            // If constrain_horizontal = true: pass parent's exact width
-            .max_width = if (scroll_area_ptr.constrain_horizontal) cross_constrained_width else cross_constrained_width,
-            // If constrain_vertical = false: pass parent's max height (still finite!)
-            // If constrain_vertical = true: pass parent's exact height
-            .max_height = if (scroll_area_ptr.constrain_vertical) cross_constrained_height else cross_constrained_height,
+            // Pass full bounds - flex will handle padding internally
+            .max_width = if (scroll_area_ptr.constrain_horizontal) bounds.width else bounds.width,
+            .max_height = if (scroll_area_ptr.constrain_vertical) bounds.height else bounds.height,
         };
 
         // Step 2: Measure all children recursively using the scroll area's flex container
@@ -734,11 +733,12 @@ pub const UI = struct {
         flex.gap = frame.gap;
         flex.padding = frame.padding;
 
-        // Calculate cross-axis constraint (already accounted for padding above)
+        // Calculate cross-axis constraint for text measurement (with padding removed)
+        const is_vertical = (scroll_area_ptr.flex.axis == .Vertical);
         const cross_axis_constraint = if (is_vertical)
-            child_constraints.max_width
+            child_constraints.max_width - frame.padding * 2
         else
-            child_constraints.max_height;
+            child_constraints.max_height - frame.padding * 2;
 
         for (frame.children.items) |child| {
             switch (child) {
@@ -869,9 +869,11 @@ pub const UI = struct {
                     try flex.addChild(nested_size, 0);
                 },
                 .scroll_layout => |scroll_data| {
-                    // Measure scroll layout
-                    const width = scroll_data.width orelse parent_bounds.width;
-                    const height = scroll_data.height orelse parent_bounds.height;
+                    // Measure scroll layout using INNER bounds (respecting parent padding)
+                    const inner_width = parent_bounds.width - layout_data.padding * 2;
+                    const inner_height = parent_bounds.height - layout_data.padding * 2;
+                    const width = scroll_data.width orelse inner_width;
+                    const height = scroll_data.height orelse inner_height;
                     try flex.addChild(.{ .width = width, .height = height }, 0);
                 },
                 .custom => |custom_widget| {

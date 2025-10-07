@@ -91,9 +91,9 @@ pub fn init(
         return error.EngineCreateFailed;
     };
 
-    // Create UI context
+    // Create UI context (scale will be updated immediately by mv_trigger_initial_resize)
     const ui = try allocator.create(UI);
-    ui.* = try UI.init(allocator, g_ctx, @floatFromInt(width), @floatFromInt(height));
+    ui.* = try UI.init(allocator, g_ctx, @floatFromInt(width), @floatFromInt(height), 2.0);
     g_ui = ui;
 
     // Initialize accessibility
@@ -141,7 +141,7 @@ fn on_resize(w: c_int, h: c_int, scale: f32) callconv(.c) void {
 
     const width_logical = @as(f32, @floatFromInt(w)) / scale;
     const height_logical = @as(f32, @floatFromInt(h)) / scale;
-    g_ui.updateSize(width_logical, height_logical);
+    g_ui.updateSize(width_logical, height_logical, scale);
 
     c.mcore_resize(g_ctx, &g_desc);
 }
