@@ -50,7 +50,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.setDebugBounds(debug_bounds);
 
     // ROOT: Main vertical stack
-    ui.beginVstack(.{ .gap = 20, .padding = 20 }) catch return;
+    ui.beginVstack(.{ .gap = 20, .padding = 60 }) catch return;
 
     // ============================================================================
     // SECTION 1: Title

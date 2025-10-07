@@ -548,11 +548,17 @@ pub const UI = struct {
         flex.gap = frame.gap;
         flex.padding = frame.padding;
 
+        // Calculate cross-axis constraint (accounting for padding)
+        const cross_axis_constraint = if (frame.kind == .Vstack)
+            bounds.width - frame.padding * 2
+        else
+            bounds.height - frame.padding * 2;
+
         for (frame.children.items) |child| {
             switch (child) {
                 .label => |data| {
                     var widget_ctx = self.createWidgetContext();
-                    const size = label_widget.measure(&widget_ctx, data.text, data.opts, bounds.width);
+                    const size = label_widget.measure(&widget_ctx, data.text, data.opts, cross_axis_constraint);
                     try flex.addChild(size, 0);
                 },
                 .button => |data| {
@@ -706,11 +712,19 @@ pub const UI = struct {
         flex.gap = frame.gap;
         flex.padding = frame.padding;
 
+        // Calculate cross-axis constraint (accounting for padding)
+        // For scroll areas, we need to determine the axis based on the flex direction
+        const is_vertical = (scroll_area_ptr.flex.axis == .Vertical);
+        const cross_axis_constraint = if (is_vertical)
+            child_constraints.max_width - frame.padding * 2
+        else
+            child_constraints.max_height - frame.padding * 2;
+
         for (frame.children.items) |child| {
             switch (child) {
                 .label => |data| {
                     var widget_ctx = self.createWidgetContext();
-                    const size = label_widget.measure(&widget_ctx, data.text, data.opts, child_constraints.max_width);
+                    const size = label_widget.measure(&widget_ctx, data.text, data.opts, cross_axis_constraint);
                     try flex.addChild(size, 0);
                 },
                 .button => |data| {
@@ -789,11 +803,17 @@ pub const UI = struct {
         flex.gap = layout_data.gap;
         flex.padding = layout_data.padding;
 
+        // Calculate cross-axis constraint (accounting for padding)
+        const cross_axis_constraint = if (layout_data.kind == .Vstack)
+            parent_bounds.width - layout_data.padding * 2
+        else
+            parent_bounds.height - layout_data.padding * 2;
+
         for (layout_data.children.items) |child| {
             switch (child) {
                 .label => |data| {
                     var widget_ctx = self.createWidgetContext();
-                    const size = label_widget.measure(&widget_ctx, data.text, data.opts, parent_bounds.width);
+                    const size = label_widget.measure(&widget_ctx, data.text, data.opts, cross_axis_constraint);
                     try flex.addChild(size, 0);
                 },
                 .button => |data| {
