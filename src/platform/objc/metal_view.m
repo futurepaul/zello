@@ -459,3 +459,13 @@ int mv_clipboard_get_text(char* buffer, int buffer_len) {
 void mv_app_quit(void) {
     [NSApp terminate:nil];
 }
+
+void mv_trigger_initial_resize(void) {
+    // Manually trigger resize callback with actual view size
+    // Call this after setting up the resize callback
+    if (g_resize_cb && GApp && GApp.view) {
+        NSRect b = GApp.view.bounds;
+        CGFloat scale = GApp.window.backingScaleFactor;
+        g_resize_cb((int)(b.size.width * scale), (int)(b.size.height * scale), (float)scale);
+    }
+}

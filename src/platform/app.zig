@@ -20,6 +20,7 @@ extern fn mv_app_run() void;
 extern fn mv_clipboard_set_text(text: [*:0]const u8) void;
 extern fn mv_clipboard_get_text(buffer: [*]u8, buffer_len: c_int) c_int;
 extern fn mv_app_quit() void;
+extern fn mv_trigger_initial_resize() void;
 
 const ImeRect = extern struct { x: f32, y: f32, w: f32, h: f32 };
 
@@ -108,6 +109,9 @@ pub fn init(
     mv_set_ime_preedit_callback(on_ime_preedit);
     mv_set_ime_cursor_rect_callback(on_ime_cursor_rect);
     mv_set_frame_callback(on_frame);
+
+    // Trigger initial resize to get actual window size
+    mv_trigger_initial_resize();
 
     return .{
         .ui = ui,
