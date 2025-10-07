@@ -51,7 +51,8 @@ pub fn measure_text(
         total_height += metrics.line_height;
     }
 
-    (width, total_height)
+    // Layout returns physical pixels, convert to logical
+    (width / scale, total_height / scale)
 }
 
 /// Measure text width up to a specific byte offset (kept for API compatibility)
@@ -106,7 +107,8 @@ pub fn byte_offset_to_x(
         marker_layout.break_all_lines(Some(max_width_no_wrap));
         marker_layout.align(None, Alignment::Start, AlignmentOptions::default());
 
-        return marked_layout.width() - marker_layout.width();
+        // Layout returns physical pixels, convert to logical
+        return (marked_layout.width() - marker_layout.width()) / scale;
     }
 
     // Get the substring up to the cursor and add a visible marker
@@ -135,7 +137,8 @@ pub fn byte_offset_to_x(
     marker_layout.break_all_lines(Some(max_width_no_wrap));
     marker_layout.align(None, Alignment::Start, AlignmentOptions::default());
 
-    marked_layout.width() - marker_layout.width()
+    // Layout returns physical pixels, convert to logical
+    (marked_layout.width() - marker_layout.width()) / scale
 }
 
 /// Hit test text at an x coordinate and return the byte offset
