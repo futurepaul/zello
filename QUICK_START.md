@@ -10,7 +10,7 @@ nix develop --impure
 cd rust/engine && cargo build --release && cd ../..
 
 # 3. Run an example
-./run_example.sh demo_simple
+./run_example.sh showcase 
 ```
 
 That's it! You should see a window with buttons and text inputs.
