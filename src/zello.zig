@@ -39,3 +39,9 @@ pub const LabelOptions = @import("ui/ui.zig").LabelOptions;
 pub const TextInputOptions = @import("ui/ui.zig").TextInputOptions;
 pub const VstackOptions = @import("ui/ui.zig").VstackOptions;
 pub const HstackOptions = @import("ui/ui.zig").HstackOptions;
+
+// Custom widget API (for extensibility)
+pub const WidgetContext = @import("ui/core/context.zig").WidgetContext;
+pub const WidgetInterface = @import("ui/widget_interface.zig").WidgetInterface;
+pub const CustomWidget = @import("ui/widget_interface.zig").CustomWidget;
+pub const createWidgetInterface = @import("ui/widget_interface.zig").createInterface;

@@ -86,3 +86,92 @@ PAUL: just keep in mind that we probably have some layout bugs right now so don'
 
 Working through those upfront keeps the implementation predictable while staying well inside the immediate-mode paradigm you already have.
 
+## IMPLEMENTATION STATUS
+
+### ✅ Completed (All Phases)
+
+All phases of the modular refactor are complete! Here's what was implemented:
+
+**Phase 1 - Layout Utilities:** ✅
+- `layout_utils.zig` with shared helpers (measureText, calcContentBounds, calcTotalBounds)
+- Unit tests for layout utilities
+- Eliminated code duplication across 3 layout functions
+
+**Phase 2 - State Consolidation:** ✅
+- `core/state.zig` with FrameInput, InteractionState, StateStore
+- Consolidated scattered state fields from UI struct
+- Clean lifecycle with beginFrame()/endFrame()
+
+**Phase 3 - WidgetContext & Built-ins:** ✅
+- `core/context.zig` with WidgetContext API
+- Moved widgets to dedicated modules (button.zig, label.zig, text_input.zig)
+- Each widget has measure() and render() functions
+- Removed ~450 lines from ui.zig
+
+**Phase 4 - Container Deduplication:** ✅
+- Extracted shared beginStack()/endStack() helpers
+- Removed ~100 lines of V/H stack duplication
+- Pattern ready for future containers (Grid, Tabs, etc.)
+
+**Phase 5 - Extensibility (BONUS):** ✅
+- Added WidgetInterface trait system (Clay-style)
+- Custom widget support via UI.customWidget()
+- Example custom badge widget
+- Type-safe with zero runtime cost
+
+### External Widget Guide (Quick Start)
+
+To create a custom widget without modifying core code:
+
+**1. Define your widget data struct:**
+```zig
+pub const MyWidgetData = struct {
+    text: [:0]const u8,
+    color: Color,
+};
+```
+
+**2. Implement measure and render functions:**
+```zig
+const context_mod = @import("zello/ui/core/context.zig");
+const layout_mod = @import("zello/ui/layout.zig");
+
+fn measure(ctx: *context_mod.WidgetContext, data: *const MyWidgetData, max_width: f32) layout_mod.Size {
+    const text_size = ctx.measureText(data.text, 16, max_width);
+    return .{
+        .width = text_size.width + 20,
+        .height = text_size.height + 10
+    };
+}
+
+fn render(
+    ctx: *context_mod.WidgetContext,
+    data: *const MyWidgetData,
+    x: f32, y: f32, w: f32, h: f32
+) !void {
+    const cmd = ctx.commandBuffer();
+    try cmd.roundedRect(x, y, w, h, 4, data.color);
+    try cmd.text(data.text, x + 10, y + 5, 16, w - 20, WHITE);
+}
+```
+
+**3. Create the interface (comptime - zero cost):**
+```zig
+const widget_interface = @import("zello/ui/widget_interface.zig");
+
+pub const Interface = widget_interface.createInterface(
+    MyWidgetData,
+    measure,
+    render,
+    null  // No cleanup needed
+);
+```
+
+**4. Use it in your app:**
+```zig
+var my_data = MyWidgetData{ .text = "Hello", .color = RED };
+try ui.customWidget(&Interface, &my_data);
+```
+
+See `src/ui/widgets/custom_widget_example.zig` for a complete working example.
+
