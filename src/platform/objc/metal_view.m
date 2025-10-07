@@ -361,15 +361,16 @@ void* mv_app_init(int width, int height, const char* ctitle) {
         [GApp.window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
 
-        // 60 fps timer
-        GApp.timer = [NSTimer scheduledTimerWithTimeInterval:(1.0/60.0)
-                                                      repeats:YES
-                                                        block:^(__unused NSTimer *t) {
+        // 60 fps timer - use common modes to keep firing during resize
+        GApp.timer = [NSTimer timerWithTimeInterval:(1.0/60.0)
+                                             repeats:YES
+                                               block:^(__unused NSTimer *t) {
             static double t0 = 0;
             double now = CFAbsoluteTimeGetCurrent();
             if (t0 == 0) t0 = now;
             if (g_frame_cb) g_frame_cb(now - t0);
         }];
+        [[NSRunLoop currentRunLoop] addTimer:GApp.timer forMode:NSRunLoopCommonModes];
         return (__bridge void*)GApp;
     }
 }
