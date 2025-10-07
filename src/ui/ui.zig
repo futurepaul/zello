@@ -246,10 +246,17 @@ pub const UI = struct {
     // Layout System
     // ============================================================================
 
-    pub fn beginVstack(self: *UI, opts: VstackOptions) !void {
-        // Nesting is now supported!
+    // Shared stack options (same for both V and H)
+    const StackOptions = struct {
+        gap: f32 = 0,
+        padding: f32 = 0,
+        width: ?f32 = null,
+        height: ?f32 = null,
+    };
+
+    fn beginStack(self: *UI, kind: LayoutKind, opts: StackOptions) !void {
         try self.layout_stack.append(self.allocator, .{
-            .kind = .Vstack,
+            .kind = kind,
             .gap = opts.gap,
             .padding = opts.padding,
             .width = opts.width,
@@ -257,95 +264,70 @@ pub const UI = struct {
             .children = std.ArrayList(WidgetData){},
             .x = 0,
             .y = 0,
+        });
+    }
+
+    fn endStack(self: *UI, expected_kind: LayoutKind) void {
+        if (self.layout_stack.items.len == 0) {
+            @panic("endStack called without matching beginStack!");
+        }
+
+        var frame = self.layout_stack.pop() orelse unreachable;
+
+        // If this is a nested layout, add it as a child to parent
+        if (self.layout_stack.items.len > 0) {
+            var parent = &self.layout_stack.items[self.layout_stack.items.len - 1];
+            parent.children.append(self.allocator, .{
+                .layout = .{
+                    .kind = expected_kind,
+                    .gap = frame.gap,
+                    .padding = frame.padding,
+                    .width = frame.width,
+                    .height = frame.height,
+                    .children = frame.children, // Transfer ownership
+                },
+            }) catch return;
+        } else {
+            // Root layout - do the actual layout and rendering!
+            defer frame.children.deinit(self.allocator);
+
+            // Clear clicked_buttons from PREVIOUS frame before rendering
+            // This frame's rendering will populate it with NEW clicks
+            self.interaction.clearClickedButtons();
+
+            self.layoutAndRender(frame, .{
+                .x = 0,
+                .y = 0,
+                .width = self.width,
+                .height = self.height,
+            }) catch return;
+        }
+    }
+
+    pub fn beginVstack(self: *UI, opts: VstackOptions) !void {
+        try self.beginStack(.Vstack, .{
+            .gap = opts.gap,
+            .padding = opts.padding,
+            .width = opts.width,
+            .height = opts.height,
         });
     }
 
     pub fn endVstack(self: *UI) void {
-        if (self.layout_stack.items.len == 0) {
-            @panic("endVstack called without matching beginVstack!");
-        }
-
-        var frame = self.layout_stack.pop() orelse unreachable;
-
-        // If this is a nested layout, add it as a child to parent
-        if (self.layout_stack.items.len > 0) {
-            var parent = &self.layout_stack.items[self.layout_stack.items.len - 1];
-            parent.children.append(self.allocator, .{
-                .layout = .{
-                    .kind = .Vstack,
-                    .gap = frame.gap,
-                    .padding = frame.padding,
-                    .width = frame.width,
-                    .height = frame.height,
-                    .children = frame.children, // Transfer ownership
-                },
-            }) catch return;
-        } else {
-            // Root layout - do the actual layout and rendering!
-            defer frame.children.deinit(self.allocator);
-
-            // Clear clicked_buttons from PREVIOUS frame before rendering
-            // This frame's rendering will populate it with NEW clicks
-            self.interaction.clearClickedButtons();
-
-            self.layoutAndRender(frame, .{
-                .x = 0,
-                .y = 0,
-                .width = self.width,
-                .height = self.height,
-            }) catch return;
-        }
+        self.endStack(.Vstack);
     }
 
     pub fn beginHstack(self: *UI, opts: HstackOptions) !void {
-        // Nesting is now supported!
-        try self.layout_stack.append(self.allocator, .{
-            .kind = .Hstack,
+        try self.beginStack(.Hstack, .{
             .gap = opts.gap,
             .padding = opts.padding,
             .width = opts.width,
             .height = opts.height,
-            .children = std.ArrayList(WidgetData){},
-            .x = 0,
-            .y = 0,
         });
     }
 
     pub fn endHstack(self: *UI) void {
-        if (self.layout_stack.items.len == 0) {
-            @panic("endHstack called without matching beginHstack!");
-        }
-
-        var frame = self.layout_stack.pop() orelse unreachable;
-
-        // If this is a nested layout, add it as a child to parent
-        if (self.layout_stack.items.len > 0) {
-            var parent = &self.layout_stack.items[self.layout_stack.items.len - 1];
-            parent.children.append(self.allocator, .{
-                .layout = .{
-                    .kind = .Hstack,
-                    .gap = frame.gap,
-                    .padding = frame.padding,
-                    .width = frame.width,
-                    .height = frame.height,
-                    .children = frame.children, // Transfer ownership
-                },
-            }) catch return;
-        } else {
-            // Root layout - do the actual layout and rendering!
-            defer frame.children.deinit(self.allocator);
-
-            // Clear clicked_buttons from PREVIOUS frame before rendering
-            // This frame's rendering will populate it with NEW clicks
-            self.interaction.clearClickedButtons();
-
-            self.layoutAndRender(frame, .{
-                .x = 0,
-                .y = 0,
-                .width = self.width,
-                .height = self.height,
-            }) catch return;
-        }
+        self.endStack(.Hstack);
     }
 
     pub fn beginScrollArea(self: *UI, opts: ScrollAreaOptions) !void {
