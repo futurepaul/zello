@@ -39,7 +39,8 @@ pub fn measure_text(
         builder.build(text)
     };
 
-    layout.break_all_lines(Some(max_width));
+    // Parley expects physical pixel coordinates, so scale max_width
+    layout.break_all_lines(Some(max_width * scale));
     layout.align(None, Alignment::Start, AlignmentOptions::default());
 
     let width = layout.width();
@@ -77,7 +78,8 @@ pub fn byte_offset_to_x(
     let byte_offset = byte_offset.min(text.len());
 
     // Use a very large max_width to prevent wrapping in single-line inputs
-    let max_width_no_wrap = 100000.0;
+    // Scale to physical pixels for Parley
+    let max_width_no_wrap = 100000.0 * scale;
 
     // Measure cursor position by adding a marker character after the cursor position
     // This prevents trailing space collapse issues
@@ -192,7 +194,8 @@ pub fn draw_text(
         builder.build(text)
     };
 
-    layout.break_all_lines(Some(wrap_width));
+    // Parley expects physical pixel coordinates, so scale wrap_width
+    layout.break_all_lines(Some(wrap_width * scale));
     layout.align(None, Alignment::Start, AlignmentOptions::default());
 
     let brush = Brush::Solid(color);
