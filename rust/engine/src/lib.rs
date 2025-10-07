@@ -1470,12 +1470,13 @@ pub extern "C" fn mcore_image_draw(
 
     // Look up image
     if let Some(image_data) = guard.images.get(image_id) {
-        // Build affine transform
+        // Build affine transform - scale position from logical to physical pixels
         use peniko::kurbo::Affine;
+        let dpi_scale = guard.gfx.scale();
 
         let affine = Affine::scale(transform.scale as f64)
             .then_rotate((transform.rotation_deg as f64).to_radians())
-            .then_translate((transform.x as f64, transform.y as f64).into());
+            .then_translate(((transform.x * dpi_scale) as f64, (transform.y * dpi_scale) as f64).into());
 
         // Draw to scene (create ImageBrush from ImageData)
         let brush = peniko::ImageBrush::from(image_data.clone());

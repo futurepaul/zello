@@ -118,7 +118,7 @@ pub fn render(
         const cursor_offset_x = c.mcore_measure_text_to_byte_offset(ctx.ctx, text_ptr, 16, cursor_pos);
         const cursor_x = x + PADDING_X + cursor_offset_x - widget_state.scroll_offset;
         const cursor_color = color_mod.WHITE;
-        try cmd_buffer.roundedRect(cursor_x, text_y, 2, text_size.height, 1, cursor_color);
+        try cmd_buffer.roundedRect(cursor_x, text_y, 1, text_size.height, 0.5, cursor_color);
     }
 
     // Pop clip rect

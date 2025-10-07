@@ -140,7 +140,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
         .active_color = color.lerp(LIGHT_GRAY, BLACK, 0.05),
         .text_color = BLACK,
         .border_color = border_color,
-        .border_width = 2,
+        .border_width = 1,
         .radius = 6,
     }) catch false) {
         std.debug.print("Bordered button clicked!\n", .{});
@@ -154,7 +154,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
         .active_color = color.lerp(LIGHT_GRAY, BLACK, 0.05),
         .text_color = BLACK,
         .border_color = border_color,
-        .border_width = 2,
+        .border_width = 1,
         .radius = 6,
         .shadow = shadow,
     }) catch false) {
