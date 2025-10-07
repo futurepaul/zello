@@ -49,9 +49,10 @@ pub fn calcTotalBounds(rects: []const layout_mod.Rect, default_padding: f32) lay
         max_y = @max(max_y, rect.y + rect.height);
     }
 
+    // Add padding to right and bottom edges since children are positioned at (padding, padding)
     return .{
-        .width = max_x - min_x,
-        .height = max_y - min_y,
+        .width = max_x + default_padding,
+        .height = max_y + default_padding,
     };
 }
 
@@ -99,6 +100,15 @@ test "calcTotalBounds - handles negative offsets" {
         .{ .x = 20, .y = 10, .width = 80, .height = 40 },
     };
     const result = calcTotalBounds(rects, 0);
-    try std.testing.expectEqual(@as(f32, 110), result.width); // -10 to 100
-    try std.testing.expectEqual(@as(f32, 55), result.height); // -5 to 50
+    try std.testing.expectEqual(@as(f32, 100), result.width); // -10 to 90 + 0 padding
+    try std.testing.expectEqual(@as(f32, 50), result.height); // -5 to 45 + 0 padding
+}
+
+test "calcTotalBounds - includes padding" {
+    const rects = &[_]layout_mod.Rect{
+        .{ .x = 10, .y = 10, .width = 100, .height = 50 },
+    };
+    const result = calcTotalBounds(rects, 10);
+    try std.testing.expectEqual(@as(f32, 120), result.width); // 10 (left) + 100 + 10 (right)
+    try std.testing.expectEqual(@as(f32, 70), result.height); // 10 (top) + 50 + 10 (bottom)
 }

@@ -1,6 +1,6 @@
 // Graphics module - handles wgpu + Vello rendering
 
-use peniko::Color;
+use peniko::{Color, kurbo::Affine};
 use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle};
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -253,8 +253,12 @@ impl Gfx {
             antialiasing_method: AaConfig::Area,
         };
 
+        // Scale the scene to physical pixels (scene is in logical coordinates)
+        let mut scaled_scene = Scene::new();
+        scaled_scene.append(scene, Some(Affine::scale(self.scale as f64)));
+
         self.renderer
-            .render_to_texture(&self.device, &self.queue, scene, &vello_view, &params)
+            .render_to_texture(&self.device, &self.queue, &scaled_scene, &vello_view, &params)
             .map_err(|e| GfxError::Vello(format!("{e:?}")))?;
 
         // 2) Blit from vello_texture (Rgba8Unorm) to surface (Bgra8Unorm)
