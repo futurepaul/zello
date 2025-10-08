@@ -601,7 +601,8 @@ pub const UI = struct {
                 },
                 .custom => |custom_widget| {
                     var widget_ctx = self.createWidgetContext();
-                    const size = custom_widget.measure(&widget_ctx, bounds.width);
+                    const available_width = @max(0, bounds.width - frame.padding * 2);
+                    const size = custom_widget.measure(&widget_ctx, available_width);
                     try flex.addChild(size, 0);
                 },
                 .image => |data| {
@@ -776,7 +777,8 @@ pub const UI = struct {
                 },
                 .custom => |custom_widget| {
                     var widget_ctx = self.createWidgetContext();
-                    const size = custom_widget.measure(&widget_ctx, child_constraints.max_width);
+                    const available_width = @max(0, child_constraints.max_width);
+                    const size = custom_widget.measure(&widget_ctx, available_width);
                     try flex.addChild(size, 0);
                 },
                 .image => |data| {
@@ -878,7 +880,8 @@ pub const UI = struct {
                 },
                 .custom => |custom_widget| {
                     var widget_ctx = self.createWidgetContext();
-                    const size = custom_widget.measure(&widget_ctx, parent_bounds.width);
+                    const available_width = @max(0, parent_bounds.width - layout_data.padding * 2);
+                    const size = custom_widget.measure(&widget_ctx, available_width);
                     try flex.addChild(size, 0);
                 },
                 .image => |data| {
@@ -977,7 +980,6 @@ pub const UI = struct {
             },
         }
     }
-
 
     // ============================================================================
     // Helpers (Internal)
@@ -1123,7 +1125,6 @@ const ScrollAreaWidget = struct {
     scroll_area: *scroll_mod.ScrollArea,
     bounds: layout_mod.Rect,
 };
-
 
 // ============================================================================
 // Option Types

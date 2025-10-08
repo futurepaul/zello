@@ -92,8 +92,11 @@ pub const FlexContainer = struct {
                 .Vertical => child.size.height,
             };
 
-            // Use max_cross for all children (ensures spacers get proper height/width)
-            const cross_size = max_cross;
+            // Allow non-flex children to keep their measured cross-axis size so they don't stretch
+            const cross_size = switch (self.axis) {
+                .Horizontal => if (child.flex > 0) max_cross else child.size.height,
+                .Vertical => if (child.flex > 0) max_cross else child.size.width,
+            };
 
             results[i] = switch (self.axis) {
                 .Horizontal => .{

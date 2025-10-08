@@ -1,7 +1,6 @@
 /// Example custom widget demonstrating the extensibility system
 /// This shows how external developers can create their own widgets
 /// without modifying the core UI code.
-
 const std = @import("std");
 const layout_mod = @import("../layout.zig");
 const context_mod = @import("../core/context.zig");
@@ -26,10 +25,10 @@ pub const Interface: widget_interface.WidgetInterface = widget_interface.createI
 
 /// Measure function - calculate the widget's size
 fn measure(ctx: *context_mod.WidgetContext, data: *const BadgeData, max_width: f32) layout_mod.Size {
-    _ = max_width;
-    const text_size = ctx.measureText(data.text, 14, 1000);
+    const content_max = @max(0, max_width - data.padding * 2);
+    const text_size = ctx.measureText(data.text, 14, content_max);
     return .{
-        .width = text_size.width + data.padding * 2,
+        .width = @min(text_size.width + data.padding * 2, max_width),
         .height = text_size.height + data.padding * 2,
     };
 }
@@ -49,10 +48,11 @@ fn render(
     try cmd_buffer.roundedRect(x, y, width, height, height / 2, data.bg_color);
 
     // Draw text centered
-    const text_size = ctx.measureText(data.text, 14, 1000);
+    const content_width = @max(0, width - data.padding * 2);
+    const text_size = ctx.measureText(data.text, 14, content_width);
     const text_x = x + (width - text_size.width) / 2.0;
     const text_y = y + (height - text_size.height) / 2.0;
-    try cmd_buffer.text(data.text, text_x, text_y, 14, text_size.width, data.text_color);
+    try cmd_buffer.text(data.text, text_x, text_y, 14, content_width, data.text_color);
 
     // Debug bounds
     ctx.drawDebugRect(x, y, width, height, color_mod.rgba(1, 0.5, 0, 0.9));
