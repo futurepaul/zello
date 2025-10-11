@@ -50,7 +50,14 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.setDebugBounds(debug_bounds);
 
     // ROOT: Main vertical stack
-    ui.beginVstack(.{ .gap = 20, .padding = 60 }) catch return;
+    ui.beginVstack(.{ .gap = 5, .padding = 5 }) catch return;
+
+    // Wrap everything in a scroll area
+    ui.beginScrollArea(.{
+        .constrain_vertical = false, // Allow content to be taller than viewport
+        .bg_color = WHITE,
+        .padding = 10,
+    }) catch return;
 
     // ============================================================================
     // SECTION 1: Title
@@ -63,7 +70,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.label("Demo 1: Nested Layouts (Horizontal with 3 Vertical Sections)", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
 
     // NESTED: Horizontal container with 3 vertical sections
-    ui.beginHstack(.{ .gap = 15, .padding = 10 }) catch return;
+    ui.beginHstack(.{ .gap = 15, .padding = 5 }) catch return;
 
     // Section A: Colored boxes
     ui.beginVstack(.{ .gap = 8, .padding = 8 }) catch return;
@@ -75,7 +82,7 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.spacer(1.0) catch {};
 
     // Section B: Counter controls
-    ui.beginVstack(.{ .gap = 8, .padding = 8 }) catch return;
+    ui.beginVstack(.{ .gap = 8, .padding = 5 }) catch return;
     var counter_buf: [32]u8 = undefined;
     const counter_text = std.fmt.bufPrintZ(&counter_buf, "Count: {d}", .{counter}) catch "0";
     ui.label(counter_text, .{ .size = 20, .color = BLACK }) catch {};
@@ -256,10 +263,12 @@ fn onFrame(ui: *zello.UI, time: f64) void {
 
     // Load the waffle dog image
     var widget_ctx = ui.createWidgetContext();
-    const img_info = zello.loadImageFile(&widget_ctx, "src/examples/waffle_dog.jpeg") catch {
+    const img_info = zello.loadImageFile(&widget_ctx, "src/examples/waffle_dog.jpeg") catch |err| {
+        std.debug.print("Failed to load image: {}\n", .{err});
         ui.label("Failed to load image", .{ .color = RED }) catch {};
         ui.endHstack();
-        ui.endVstack(); // ROOT
+        ui.endScrollArea(); // Close scroll area
+        ui.endVstack(); // Close ROOT
         return;
     };
     defer zello.releaseImage(&widget_ctx, img_info.id);
@@ -289,6 +298,8 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.label("✓ VoiceOver accessibility support", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.label("✓ Custom widget extensibility API", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.endVstack();
+
+    ui.endScrollArea(); // End scroll area
 
     ui.endVstack(); // End root vstack
 }

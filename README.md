@@ -25,13 +25,14 @@ See [THE_PLAN.md](THE_PLAN.md) for the architectural vision and [CLEANUP_AND_LIB
 
 ```zig
 const std = @import("std");
-const zello = @import("zello");
+const zello = @import("zello.zig");
+const color = @import("ui/color.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    var app = try zello.init(gpa.allocator(), 400, 300, "Hello Zello", onFrame);
+    var app = try zello.init(gpa.allocator(), 600, 400, "Hello Zello", onFrame);
     defer app.deinit();
 
     zello.run(app);
@@ -39,11 +40,11 @@ pub fn main() !void {
 
 fn onFrame(ui: *zello.UI, time: f64) void {
     ui.beginFrame();
-    defer ui.endFrame(.{ 0.1, 0.1, 0.15, 1.0 }) catch {};
+    defer ui.endFrame(color.WHITE) catch {};
 
-    ui.beginVstack(.{ .gap = 20, .padding = 20 }) catch return;
+    ui.beginVstack(.{ .gap = 20, .padding = 40 }) catch return;
 
-    ui.label("Hello, Zello!", .{ .size = 24 }) catch {};
+    ui.label("Hello, Zello!", .{ .size = 24, .color = color.BLACK }) catch {};
 
     if (ui.button("Click Me!", .{}) catch false) {
         std.debug.print("Button clicked at {d:.2}s\n", .{time});
@@ -53,15 +54,34 @@ fn onFrame(ui: *zello.UI, time: f64) void {
 }
 ```
 
-## Building
+## Building and Running
 
-**With Nix (recommended):**
+**Always use the Nix development environment** (ensures correct Zig version and dependencies):
 
 ```bash
+# Enter the dev environment
 nix develop --impure
+
+# Build Rust renderer (first time or after Rust changes)
 cd rust/engine && cargo build --release && cd ../..
+
+# Build Zig app
+zig build
+
+# Run the showcase demo (default)
 zig build run
+# or
+./zig-out/bin/zig_host_app
+
+# Run a specific demo
+zig build run -- hello_world
+# or
+./zig-out/bin/zig_host_app hello_world
 ```
+
+**Available demos:**
+- `showcase` - Full feature showcase with all widgets (default)
+- `hello_world` - Simple hello world with a button
 
 ## Project Structure
 
@@ -82,27 +102,12 @@ See [CLEANUP_AND_LIBRARYIFY.md](CLEANUP_AND_LIBRARYIFY.md) for complete API docu
 
 See LICENSE file.
 
-## Running Examples
+## Creating Your Own App
 
-### Quick Method (with script)
+The demos in `src/examples/` show how to create apps. The pattern is simple:
 
-```bash
-./run_example.sh counter              # Run counter example
-./run_example.sh hello_world          # Run hello world
-./run_example.sh counter_advanced     # Run advanced counter
-```
+1. Create a `.zig` file with a `main()` function that calls `zello.init()`
+2. Provide a frame callback function that builds your UI
+3. Call `zello.run()` to start the event loop
 
-### Manual Method
-
-1. Edit `src/main.zig` and change the import:
-   ```zig
-   const example = @import("examples/counter.zig");
-   ```
-
-2. Build and run:
-   ```bash
-   nix develop --impure
-   zig build run
-   ```
-
-See `src/examples/README.md` for all available examples and details.
+Check out `src/examples/hello_world.zig` for the simplest example, or `src/examples/showcase.zig` for a comprehensive feature demo.

@@ -47,8 +47,12 @@ pub const loadImageFile = @import("ui/ui.zig").loadImageFile;
 pub const releaseImage = @import("ui/ui.zig").releaseImage;
 pub const imageById = @import("ui/ui.zig").imageById;
 
+// Color utilities (re-exported for convenience)
+pub const color = @import("ui/color.zig");
+
 // Custom widget API (for extensibility)
 pub const WidgetContext = @import("ui/core/context.zig").WidgetContext;
 pub const WidgetInterface = @import("ui/widget_interface.zig").WidgetInterface;
 pub const CustomWidget = @import("ui/widget_interface.zig").CustomWidget;
 pub const createWidgetInterface = @import("ui/widget_interface.zig").createInterface;
+pub const custom_badge = @import("ui/widgets/custom_widget_example.zig");

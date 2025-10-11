@@ -21,17 +21,6 @@ fn onFrame(ui: *zello.UI, time: f64) void {
 
     ui.label("Hello, Zello!", .{ .size = 24, .color = color.BLACK }) catch {};
 
-    // Nested hstack with spacers
-    ui.beginHstack(.{ .gap = 10, .padding = 10 }) catch return;
-
-    ui.label("Left", .{ .bg_color = color.rgba(1, 0, 0, 0.3), .color = color.BLACK }) catch {};
-    ui.spacer(1.0) catch {};
-    ui.label("Middle", .{ .bg_color = color.rgba(0, 1, 0, 0.3), .color = color.BLACK }) catch {};
-    ui.spacer(1.0) catch {};
-    ui.label("Right", .{ .bg_color = color.rgba(0, 0, 1, 0.3), .color = color.BLACK }) catch {};
-
-    ui.endHstack();
-
     if (ui.button("Click Me!", .{}) catch false) {
         std.debug.print("Button clicked at {d:.2}s\n", .{time});
     }
