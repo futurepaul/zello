@@ -142,6 +142,13 @@ pub const UI = struct {
         self.debug_bounds = enabled;
     }
 
+    /// Get the frame arena allocator for per-frame allocations
+    /// This allocator is reset at the start of each frame
+    /// Use this for temporary data that doesn't need to persist across frames
+    pub fn frameAllocator(self: *UI) std.mem.Allocator {
+        return self.frame_arena.allocator();
+    }
+
     // ============================================================================
     // Widget Context Creation
     // ============================================================================
@@ -298,7 +305,7 @@ pub const UI = struct {
             .padding = opts.padding,
             .width = opts.width,
             .height = opts.height,
-            .children = std.ArrayList(WidgetData){},
+            .children = .{},
             .x = 0,
             .y = 0,
         });
@@ -309,12 +316,12 @@ pub const UI = struct {
             @panic("endStack called without matching beginStack!");
         }
 
-        var frame = self.layout_stack.pop() orelse unreachable;
+        const frame = self.layout_stack.pop() orelse unreachable;
 
         // If this is a nested layout, add it as a child to parent
         if (self.layout_stack.items.len > 0) {
             var parent = &self.layout_stack.items[self.layout_stack.items.len - 1];
-            parent.children.append(self.allocator, .{
+            parent.children.append(self.frameAllocator(), .{
                 .layout = .{
                     .kind = expected_kind,
                     .gap = frame.gap,
@@ -326,8 +333,6 @@ pub const UI = struct {
             }) catch return;
         } else {
             // Root layout - do the actual layout and rendering!
-            defer frame.children.deinit(self.allocator);
-
             self.layoutAndRender(frame, .{
                 .x = 0,
                 .y = 0,
@@ -386,7 +391,7 @@ pub const UI = struct {
             .padding = opts.padding,
             .width = opts.width,
             .height = opts.height,
-            .children = std.ArrayList(WidgetData){},
+            .children = .{},
             .x = 0,
             .y = 0,
             .scroll_area = gop.value_ptr.*,
@@ -401,7 +406,7 @@ pub const UI = struct {
             @panic("endScrollArea called without matching beginScrollArea!");
         }
 
-        var frame = self.layout_stack.pop() orelse unreachable;
+        const frame = self.layout_stack.pop() orelse unreachable;
         if (frame.kind != .ScrollArea) {
             @panic("endScrollArea called but top of stack is not ScrollArea!");
         }
@@ -409,7 +414,7 @@ pub const UI = struct {
         // If this is a nested layout, add it as a child to parent
         if (self.layout_stack.items.len > 0) {
             var parent = &self.layout_stack.items[self.layout_stack.items.len - 1];
-            parent.children.append(self.allocator, .{
+            parent.children.append(self.frameAllocator(), .{
                 .scroll_layout = .{
                     .scroll_area = frame.scroll_area.?,
                     .scroll_area_id = frame.scroll_area_id,
@@ -422,9 +427,7 @@ pub const UI = struct {
             }) catch return;
         } else {
             // Root scroll area (unusual but supported)
-            defer frame.children.deinit(self.allocator);
-            defer frame.scroll_area.?.deinit();
-
+            // Note: scroll_area is stored in StateStore, not owned by frame
             self.layoutAndRenderScroll(frame, .{
                 .x = 0,
                 .y = 0,
@@ -460,7 +463,7 @@ pub const UI = struct {
         }
 
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
-        try frame.children.append(self.allocator, .{
+        try frame.children.append(self.frameAllocator(), .{
             .label = .{ .text = text, .opts = opts },
         });
     }
@@ -478,7 +481,7 @@ pub const UI = struct {
 
         // Store button data for deferred rendering
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
-        try frame.children.append(self.allocator, .{
+        try frame.children.append(self.frameAllocator(), .{
             .button = .{ .id = id, .text = label_text, .opts = opts },
         });
 
@@ -492,7 +495,7 @@ pub const UI = struct {
         }
 
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
-        try frame.children.append(self.allocator, .{
+        try frame.children.append(self.frameAllocator(), .{
             .spacer = .{ .flex = flex },
         });
     }
@@ -509,7 +512,7 @@ pub const UI = struct {
 
         // Store text input data for deferred rendering
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
-        try frame.children.append(self.allocator, .{
+        try frame.children.append(self.frameAllocator(), .{
             .text_input = .{ .id = id, .id_str = id_str, .buffer = buffer, .opts = opts },
         });
 
@@ -525,7 +528,7 @@ pub const UI = struct {
         }
 
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
-        try frame.children.append(self.allocator, .{
+        try frame.children.append(self.frameAllocator(), .{
             .image = .{
                 .image_id = image_id,
                 .natural_width = natural_width,
@@ -549,7 +552,7 @@ pub const UI = struct {
         const custom = widget_interface.CustomWidget.init(@TypeOf(data.*), interface, data);
 
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
-        try frame.children.append(self.allocator, .{
+        try frame.children.append(self.frameAllocator(), .{
             .custom = custom,
         });
     }
@@ -570,10 +573,9 @@ pub const UI = struct {
 
         // Step 1: Measure all children recursively
         var flex = flex_mod.FlexContainer.init(
-            self.allocator,
+            self.frameAllocator(),
             if (frame.kind == .Vstack) .Vertical else .Horizontal,
         );
-        defer flex.deinit();
 
         flex.gap = frame.gap;
         flex.padding = frame.padding;
@@ -651,7 +653,6 @@ pub const UI = struct {
             layout_mod.BoxConstraints.loose(bounds.width, cross_constrained_height);
 
         const rects = try flex.layout_children(constraints);
-        defer self.allocator.free(rects);
 
         // Step 3: Render each child at its calculated position
         for (frame.children.items, rects) |child, rect| {
@@ -849,10 +850,9 @@ pub const UI = struct {
     fn measureLayout(self: *UI, layout_data: anytype, parent_bounds: layout_mod.Rect) !layout_mod.Size {
         // Create a temporary flex container to measure the layout
         var flex = flex_mod.FlexContainer.init(
-            self.allocator,
+            self.frameAllocator(),
             if (layout_data.kind == .Vstack) .Vertical else .Horizontal,
         );
-        defer flex.deinit();
 
         flex.gap = layout_data.gap;
         flex.padding = layout_data.padding;
@@ -928,7 +928,6 @@ pub const UI = struct {
             layout_mod.BoxConstraints.loose(parent_bounds.width, cross_constrained_height);
 
         const rects = try flex.layout_children(constraints);
-        defer self.allocator.free(rects);
 
         // Calculate bounding box of all children using shared helper
         const calculated_size = layout_utils.calcTotalBounds(rects, layout_data.padding);
