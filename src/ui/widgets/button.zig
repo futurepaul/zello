@@ -93,14 +93,8 @@ pub fn render(
     const text_color = opts.text_color orelse color_mod.WHITE;
     try cmd_buffer.text(text, text_x, text_y, font_size, text_size.width, text_color);
 
-    // Track for hit testing
+    // Register clickable for next frame (includes bounds for hit testing)
     try ctx.registerClickable(id, .Button, bounds);
-
-    // Check if clicked (for next frame)
-    const mouse_pos = ctx.getMousePos();
-    if (bounds.contains(mouse_pos.x, mouse_pos.y) and ctx.isMouseClicked()) {
-        try ctx.markClicked(id);
-    }
 
     // Debug bounds (green for buttons)
     ctx.drawDebugRect(x, y, width, height, color_mod.rgba(0, 1, 0, 0.9));

@@ -14,6 +14,8 @@ const widget_interface = @import("widget_interface.zig");
 const layout_utils = @import("layout_utils.zig");
 const state_mod = @import("core/state.zig");
 const context_mod = @import("core/context.zig");
+const frame_arena_mod = @import("core/frame_arena.zig");
+const frame_exchange_mod = @import("core/frame_exchange.zig");
 const c_api = @import("../renderer/c_api.zig");
 const c = c_api.c;
 const color_mod = @import("color.zig");
@@ -28,9 +30,17 @@ pub const UI = struct {
     commands: commands_mod.CommandBuffer,
     a11y_builder: a11y_mod.TreeBuilder,
 
-    // Consolidated state management
+    // Frame arena for per-frame allocations
+    frame_arena: frame_arena_mod.FrameArena,
+
+    // Frame exchange for cross-frame data
+    frame_exchange: frame_exchange_mod.FrameExchange,
+
+    // Persistent state management
     state: state_mod.StateStore,
-    interaction: state_mod.InteractionState,
+
+    // Input state (current frame)
+    input: frame_exchange_mod.FrameInput,
 
     // Layout stack (supports arbitrary nesting)
     layout_stack: std.ArrayList(LayoutFrame),
@@ -46,14 +56,19 @@ pub const UI = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, ctx: *c.mcore_context_t, width: f32, height: f32, scale: f32) !UI {
+        // Start with 1MB arena, will grow as needed
+        const initial_arena_size = 1024 * 1024;
+
         return .{
             .ctx = ctx,
             .id_system = id_mod.UI.init(allocator),
             .focus = focus_mod.FocusState.init(allocator),
             .commands = try commands_mod.CommandBuffer.init(allocator, 1000),
             .a11y_builder = a11y_mod.TreeBuilder.init(allocator, 1), // root ID
+            .frame_arena = try frame_arena_mod.FrameArena.init(allocator, initial_arena_size),
+            .frame_exchange = frame_exchange_mod.FrameExchange.init(allocator),
             .state = state_mod.StateStore.init(allocator),
-            .interaction = state_mod.InteractionState.init(allocator),
+            .input = frame_exchange_mod.FrameInput{},
             .layout_stack = .{},
             .width = width,
             .height = height,
@@ -68,15 +83,25 @@ pub const UI = struct {
         self.commands.deinit();
         self.a11y_builder.deinit();
         self.state.deinit();
-        self.interaction.deinit();
+        self.frame_arena.deinit();
+        self.frame_exchange.deinit();
         self.layout_stack.deinit(self.allocator);
     }
 
     pub fn beginFrame(self: *UI) void {
-        self.commands.reset();
-        self.focus.beginFrame();
-        self.interaction.beginFrame();
+        // Reset frame arena
+        self.frame_arena.beginFrame();
 
+        // Reset command buffer
+        self.commands.reset();
+
+        // Reset focus tracking
+        self.focus.beginFrame();
+
+        // Swap frame exchange buffers and recompute interaction state
+        self.frame_exchange.beginFrame(&self.frame_arena, self.input);
+
+        // Reset accessibility tree
         self.a11y_builder.deinit();
         self.a11y_builder = a11y_mod.TreeBuilder.init(self.allocator, 1);
     }
@@ -100,7 +125,11 @@ pub const UI = struct {
             if (err != null) std.debug.print("mcore error: {s}\n", .{std.mem.span(err)});
         }
 
-        self.interaction.endFrame();
+        // End frame arena (update stats)
+        self.frame_arena.endFrame();
+
+        // Clear one-frame input flags
+        self.input.mouse_clicked = false;
     }
 
     pub fn updateSize(self: *UI, width: f32, height: f32, scale: f32) void {
@@ -125,7 +154,8 @@ pub const UI = struct {
             .allocator = self.allocator,
             .commands = &self.commands,
             .state = &self.state,
-            .interaction = &self.interaction,
+            .frame_exchange = &self.frame_exchange,
+            .input = &self.input,
             .focus = &self.focus,
             .a11y_builder = &self.a11y_builder,
             .debug_bounds = self.debug_bounds,
@@ -137,63 +167,63 @@ pub const UI = struct {
     // ============================================================================
 
     pub fn handleMouseDown(self: *UI, x: f32, y: f32) void {
-        self.interaction.input.mouse_x = x;
-        self.interaction.input.mouse_y = y;
-        self.interaction.input.mouse_down = true;
+        self.input.mouse_x = x;
+        self.input.mouse_y = y;
+        self.input.mouse_down = true;
 
         // For text inputs, we need to handle mouse down immediately to position cursor
-        // We check the PREVIOUS frame's clickable_widgets since current frame hasn't rendered yet
+        // We check the PREVIOUS frame's clickables since current frame hasn't rendered yet
         // This is OK because text inputs are stateful and persist across frames
-        for (self.interaction.clickable_widgets.items) |widget| {
-            if (widget.kind == .TextInput and widget.bounds.contains(x, y)) {
+        for (self.frame_exchange.prev.clickables.items) |clickable| {
+            if (clickable.kind == .TextInput and clickable.bounds.contains(x, y)) {
                 // Handle text input mouse down
-                if (self.state.text_inputs.getPtr(widget.id)) |ti| {
-                    const local_x = x - (widget.bounds.x + text_input_widget.PADDING_X) + ti.scroll_offset;
-                    const len = c.mcore_text_input_get(self.ctx, widget.id, @constCast(&ti.buffer), 256);
+                if (self.state.text_inputs.getPtr(clickable.id)) |ti| {
+                    const local_x = x - (clickable.bounds.x + text_input_widget.PADDING_X) + ti.scroll_offset;
+                    const len = c.mcore_text_input_get(self.ctx, clickable.id, @constCast(&ti.buffer), 256);
                     const text = ti.buffer[0..@intCast(len)];
                     const text_ptr: [*:0]const u8 = if (text.len > 0) @ptrCast(text.ptr) else "";
                     var widget_ctx = self.createWidgetContext();
                     const byte_offset = widget_ctx.findByteOffsetAtX(text_ptr, 16, local_x);
-                    c.mcore_text_input_start_selection(self.ctx, widget.id, @intCast(byte_offset));
+                    c.mcore_text_input_start_selection(self.ctx, clickable.id, @intCast(byte_offset));
                 }
-                self.focus.setFocus(widget.id);
+                self.focus.setFocus(clickable.id);
                 return;
             }
         }
 
         // For buttons, focus is set, but click is detected in wasClicked() next frame
-        for (self.interaction.clickable_widgets.items) |widget| {
-            if (widget.kind == .Button and widget.bounds.contains(x, y)) {
-                self.focus.setFocus(widget.id);
+        for (self.frame_exchange.prev.clickables.items) |clickable| {
+            if (clickable.kind == .Button and clickable.bounds.contains(x, y)) {
+                self.focus.setFocus(clickable.id);
                 return;
             }
         }
     }
 
     pub fn handleMouseUp(self: *UI, x: f32, y: f32) void {
-        self.interaction.input.mouse_x = x;
-        self.interaction.input.mouse_y = y;
-        self.interaction.input.mouse_down = false;
-        self.interaction.input.mouse_clicked = true;
+        self.input.mouse_x = x;
+        self.input.mouse_y = y;
+        self.input.mouse_down = false;
+        self.input.mouse_clicked = true;
     }
 
     pub fn handleMouseMove(self: *UI, x: f32, y: f32) void {
-        self.interaction.input.mouse_x = x;
-        self.interaction.input.mouse_y = y;
+        self.input.mouse_x = x;
+        self.input.mouse_y = y;
 
         // Handle drag for text selection
-        if (self.interaction.input.mouse_down) {
+        if (self.input.mouse_down) {
             if (self.focus.focused_id) |fid| {
-                for (self.interaction.clickable_widgets.items) |widget| {
-                    if (widget.kind == .TextInput and widget.id == fid and widget.bounds.contains(x, y)) {
-                        if (self.state.text_inputs.getPtr(widget.id)) |ti| {
-                            const local_x = x - (widget.bounds.x + text_input_widget.PADDING_X) + ti.scroll_offset;
-                            const len = c.mcore_text_input_get(self.ctx, widget.id, @constCast(&ti.buffer), 256);
+                for (self.frame_exchange.prev.clickables.items) |clickable| {
+                    if (clickable.kind == .TextInput and clickable.id == fid and clickable.bounds.contains(x, y)) {
+                        if (self.state.text_inputs.getPtr(clickable.id)) |ti| {
+                            const local_x = x - (clickable.bounds.x + text_input_widget.PADDING_X) + ti.scroll_offset;
+                            const len = c.mcore_text_input_get(self.ctx, clickable.id, @constCast(&ti.buffer), 256);
                             const text = ti.buffer[0..@intCast(len)];
                             const text_ptr: [*:0]const u8 = if (text.len > 0) @ptrCast(text.ptr) else "";
                             var widget_ctx = self.createWidgetContext();
                             const byte_offset = widget_ctx.findByteOffsetAtX(text_ptr, 16, local_x);
-                            c.mcore_text_input_set_cursor_pos(self.ctx, widget.id, @intCast(byte_offset), 1);
+                            c.mcore_text_input_set_cursor_pos(self.ctx, clickable.id, @intCast(byte_offset), 1);
                         }
                         return;
                     }
@@ -211,13 +241,14 @@ pub const UI = struct {
         const scaled_delta_y = delta_y / self.scale;
 
         // Find scroll area under mouse cursor (check in reverse order - topmost first)
-        var i: usize = self.interaction.scroll_areas_for_events.items.len;
+        const scroll_regions = self.frame_exchange.getScrollRegions();
+        var i: usize = scroll_regions.len;
         while (i > 0) {
             i -= 1;
-            const scroll_widget = &self.interaction.scroll_areas_for_events.items[i];
-            if (scroll_widget.bounds.contains(self.interaction.input.mouse_x, self.interaction.input.mouse_y)) {
+            const region = &scroll_regions[i];
+            if (region.bounds.contains(self.input.mouse_x, self.input.mouse_y)) {
                 // Apply scroll in logical pixel space
-                scroll_widget.scroll_area.scroll_by_momentum(.{
+                region.scroll_area.scroll_by_momentum(.{
                     .x = -scaled_delta_x, // Invert for natural scrolling
                     .y = -scaled_delta_y,
                 });
@@ -296,10 +327,6 @@ pub const UI = struct {
         } else {
             // Root layout - do the actual layout and rendering!
             defer frame.children.deinit(self.allocator);
-
-            // Clear clicked_buttons from PREVIOUS frame before rendering
-            // This frame's rendering will populate it with NEW clicks
-            self.interaction.clearClickedButtons();
 
             self.layoutAndRender(frame, .{
                 .x = 0,
@@ -398,8 +425,6 @@ pub const UI = struct {
             defer frame.children.deinit(self.allocator);
             defer frame.scroll_area.?.deinit();
 
-            self.interaction.clearClickedButtons();
-
             self.layoutAndRenderScroll(frame, .{
                 .x = 0,
                 .y = 0,
@@ -458,7 +483,7 @@ pub const UI = struct {
         });
 
         // Check if this button was clicked in the previous frame's rendering pass
-        return self.interaction.wasClicked(id);
+        return self.frame_exchange.wasClicked(id);
     }
 
     pub fn spacer(self: *UI, flex: f32) !void {
@@ -709,8 +734,8 @@ pub const UI = struct {
         const scroll_area_ptr = self.state.scroll_areas.getPtr(frame.scroll_area_id) orelse
             @panic("Scroll area ID not found in state!");
 
-        // Register scroll area for mouse wheel events
-        try self.interaction.registerScrollArea(scroll_area_ptr, bounds);
+        // Register scroll area for mouse wheel events (for next frame)
+        try self.frame_exchange.recordScrollRegion(scroll_area_ptr, bounds);
 
         // Draw background for scroll area if specified
         if (frame.scroll_bg_color) |bg_color| {

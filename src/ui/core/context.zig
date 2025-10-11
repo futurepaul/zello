@@ -5,6 +5,7 @@ const commands_mod = @import("../commands.zig");
 const state_mod = @import("state.zig");
 const focus_mod = @import("../focus.zig");
 const a11y_mod = @import("../a11y.zig");
+const frame_exchange_mod = @import("frame_exchange.zig");
 const c_api = @import("../../renderer/c_api.zig");
 const c = c_api.c;
 
@@ -18,7 +19,8 @@ pub const WidgetContext = struct {
     // Widget services
     commands: *commands_mod.CommandBuffer,
     state: *state_mod.StateStore,
-    interaction: *state_mod.InteractionState,
+    frame_exchange: *frame_exchange_mod.FrameExchange,
+    input: *frame_exchange_mod.FrameInput,
     focus: *focus_mod.FocusState,
     a11y_builder: *a11y_mod.TreeBuilder,
 
@@ -101,40 +103,40 @@ pub const WidgetContext = struct {
 
     /// Check if a bounds is hovered by the mouse
     pub fn isHovered(self: *const WidgetContext, bounds: layout_mod.Rect) bool {
-        return self.interaction.isHovered(bounds);
+        return bounds.contains(self.input.mouse_x, self.input.mouse_y);
     }
 
     /// Check if a bounds is pressed (hovered and mouse down)
     pub fn isPressed(self: *const WidgetContext, bounds: layout_mod.Rect) bool {
-        return self.interaction.isPressed(bounds);
+        return self.isHovered(bounds) and self.input.mouse_down;
     }
 
-    /// Register a clickable widget for hit testing
-    pub fn registerClickable(self: *WidgetContext, id: u64, kind: state_mod.ClickableKind, bounds: layout_mod.Rect) !void {
-        try self.interaction.registerClickable(id, kind, bounds);
+    /// Register a clickable widget for hit testing (records for next frame)
+    pub fn registerClickable(self: *WidgetContext, id: u64, kind: frame_exchange_mod.ClickableKind, bounds: layout_mod.Rect) !void {
+        try self.frame_exchange.recordClickable(id, bounds, kind);
     }
 
-    /// Check if a widget was clicked this frame
+    /// Check if a widget was clicked (from previous frame)
     pub fn wasClicked(self: *const WidgetContext, id: u64) bool {
-        return self.interaction.wasClicked(id);
+        return self.frame_exchange.wasClicked(id);
     }
 
-    /// Mark a widget as clicked (for next frame)
-    pub fn markClicked(self: *WidgetContext, id: u64) !void {
-        try self.interaction.markClicked(id);
+    /// Register a scroll region for event handling (records for next frame)
+    pub fn registerScrollRegion(self: *WidgetContext, scroll_area: *@import("../widgets/scroll_area.zig").ScrollArea, bounds: layout_mod.Rect) !void {
+        try self.frame_exchange.recordScrollRegion(scroll_area, bounds);
     }
 
     /// Get current mouse position
     pub fn getMousePos(self: *const WidgetContext) struct { x: f32, y: f32 } {
         return .{
-            .x = self.interaction.input.mouse_x,
-            .y = self.interaction.input.mouse_y,
+            .x = self.input.mouse_x,
+            .y = self.input.mouse_y,
         };
     }
 
     /// Check if mouse was clicked this frame
     pub fn isMouseClicked(self: *const WidgetContext) bool {
-        return self.interaction.input.mouse_clicked;
+        return self.input.mouse_clicked;
     }
 
     // ========================================================================
