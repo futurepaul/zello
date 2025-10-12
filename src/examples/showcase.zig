@@ -299,6 +299,45 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.label("✓ Custom widget extensibility API", .{ .size = FONT_SIZE, .color = BLACK }) catch {};
     ui.endVstack();
 
+    // ============================================================================
+    // SECTION 10: Performance Stats (Instrumentation)
+    // ============================================================================
+    const stats = ui.getTextStats();
+    const cache_stats = ui.getTextCacheStats();
+    const arena_stats = ui.frame_arena.getStats();
+
+    ui.beginVstack(.{ .gap = 3, .padding = 8 }) catch return;
+    ui.label("Performance Instrumentation:", .{ .size = FONT_SIZE, .color = BLACK, .bg_color = LIGHT_GRAY, .padding = 8 }) catch {};
+
+    var stats_buf: [128]u8 = undefined;
+
+    // Rust-side measurements (total FFI calls)
+    const stats_text = std.fmt.bufPrintZ(&stats_buf, "Rust measure() calls: {d}", .{stats.measure_calls}) catch "?";
+    ui.label(stats_text, .{ .size = FONT_SIZE - 2, .color = BLACK }) catch {};
+
+    const offset_text = std.fmt.bufPrintZ(&stats_buf, "Rust offset() calls: {d}", .{stats.offset_calls}) catch "?";
+    ui.label(offset_text, .{ .size = FONT_SIZE - 2, .color = BLACK }) catch {};
+
+    // Cache stats
+    const cache_text = std.fmt.bufPrintZ(&stats_buf, "Cache: {d} hits / {d} misses ({d:.1}% hit rate)", .{
+        cache_stats.hits,
+        cache_stats.misses,
+        ui.getTextCacheHitRate(),
+    }) catch "?";
+    ui.label(cache_text, .{ .size = FONT_SIZE - 2, .color = BLACK }) catch {};
+
+    const entries_text = std.fmt.bufPrintZ(&stats_buf, "Cache entries: {d} unique", .{cache_stats.unique_entries}) catch "?";
+    ui.label(entries_text, .{ .size = FONT_SIZE - 2, .color = BLACK }) catch {};
+
+    // Arena stats
+    const arena_text = std.fmt.bufPrintZ(&stats_buf, "Frame arena: {d} KB / {d} KB peak", .{
+        arena_stats.current_usage / 1024,
+        arena_stats.peak_usage / 1024,
+    }) catch "?";
+    ui.label(arena_text, .{ .size = FONT_SIZE - 2, .color = BLACK }) catch {};
+
+    ui.endVstack();
+
     ui.endScrollArea(); // End scroll area
 
     ui.endVstack(); // End root vstack

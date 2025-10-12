@@ -37,11 +37,11 @@ pub fn render(
         try cmd_buffer.roundedRect(x, y, width, height, 4, bg);
     }
 
-    // Draw text
+    // Draw text (safely copied to frame arena)
     const text_x = x + opts.padding;
     const text_y = y + opts.padding;
     const text_width = width - opts.padding * 2;
-    try cmd_buffer.text(text, text_x, text_y, opts.size, text_width, opts.color);
+    try ctx.drawText(text, text_x, text_y, opts.size, text_width, opts.color);
 
     // Debug bounds (cyan for labels)
     ctx.drawDebugRect(x, y, width, height, color_mod.rgba(0, 1, 1, 0.8));

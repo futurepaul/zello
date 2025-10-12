@@ -117,6 +117,13 @@ pub struct McoreTextSize {
 
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct McoreTextStats {
+    pub total_measure_calls: u32,
+    pub total_offset_calls: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct McoreDrawCommand {
     pub kind: u8,
     pub x: f32,
@@ -173,6 +180,20 @@ impl From<Color> for McoreColor {
 }
 
 
+/// Text measurement statistics for instrumentation
+#[derive(Default)]
+struct TextMeasurementStats {
+    total_measure_calls: u32,
+    total_offset_calls: u32,
+}
+
+impl TextMeasurementStats {
+    fn reset(&mut self) {
+        self.total_measure_calls = 0;
+        self.total_offset_calls = 0;
+    }
+}
+
 struct Engine {
     gfx: gfx::Gfx,
     scene: Scene,
@@ -182,6 +203,7 @@ struct Engine {
     text_inputs: text_input::TextInputManager,
     a11y: Option<a11y::AccessibilityAdapter>,
     images: image::ImageManager,
+    text_stats: TextMeasurementStats,
 }
 
 #[repr(C)]
@@ -219,6 +241,7 @@ pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreConte
                         text_inputs: text_input::TextInputManager::new(),
                         a11y: None,
                         images: image::ImageManager::new(),
+                        text_stats: TextMeasurementStats::default(),
                     };
                     Box::into_raw(Box::new(McoreContext(Arc::new(Mutex::new(eng)))))
                 }
@@ -356,6 +379,9 @@ pub extern "C" fn mcore_measure_text(
     let out = unsafe { out.as_mut() }.unwrap();
     let mut guard = ctx.0.lock();
 
+    // Increment instrumentation counter
+    guard.text_stats.total_measure_calls += 1;
+
     let scale = guard.gfx.scale();
 
     // Measure with scale for quality, returns logical measurements
@@ -382,6 +408,9 @@ pub extern "C" fn mcore_measure_text_to_byte_offset(
     let text = unsafe { CStr::from_ptr(text) }.to_str().unwrap_or("");
     let mut guard = ctx.0.lock();
 
+    // Increment instrumentation counter
+    guard.text_stats.total_offset_calls += 1;
+
     let scale = guard.gfx.scale();
     let byte_offset = byte_offset.max(0) as usize;
 
@@ -392,6 +421,26 @@ pub extern "C" fn mcore_measure_text_to_byte_offset(
         byte_offset,
         scale,
     )
+}
+
+#[no_mangle]
+pub extern "C" fn mcore_get_text_stats(
+    ctx: *mut McoreContext,
+    out: *mut McoreTextStats,
+) {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let out = unsafe { out.as_mut() }.unwrap();
+    let guard = ctx.0.lock();
+
+    out.total_measure_calls = guard.text_stats.total_measure_calls;
+    out.total_offset_calls = guard.text_stats.total_offset_calls;
+}
+
+#[no_mangle]
+pub extern "C" fn mcore_reset_text_stats(ctx: *mut McoreContext) {
+    let ctx = unsafe { ctx.as_mut() }.unwrap();
+    let mut guard = ctx.0.lock();
+    guard.text_stats.reset();
 }
 
 #[no_mangle]

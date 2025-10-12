@@ -62,6 +62,11 @@ typedef struct {
   float height;
 } mcore_text_size_t;
 
+typedef struct {
+  unsigned int total_measure_calls;
+  unsigned int total_offset_calls;
+} mcore_text_stats_t;
+
 typedef enum {
   MCORE_DRAW_CMD_ROUNDED_RECT = 0,
   MCORE_DRAW_CMD_TEXT = 1,
@@ -155,6 +160,10 @@ void mcore_text_input_start_selection(mcore_context_t* ctx, unsigned long long i
 
 // Text measurement at cursor
 float mcore_measure_text_to_byte_offset(mcore_context_t* ctx, const char* text, float font_size, int byte_offset);
+
+// Text measurement statistics (for instrumentation)
+void mcore_get_text_stats(mcore_context_t* ctx, mcore_text_stats_t* out);
+void mcore_reset_text_stats(mcore_context_t* ctx);
 
 // IME (Input Method Editor) support
 typedef struct {

@@ -47,12 +47,12 @@ fn render(
     // Draw rounded rectangle background
     try cmd_buffer.roundedRect(x, y, width, height, height / 2, data.bg_color);
 
-    // Draw text centered
+    // Draw text centered (safely copied to frame arena)
     const content_width = @max(0, width - data.padding * 2);
     const text_size = ctx.measureText(data.text, 14, content_width);
     const text_x = x + (width - text_size.width) / 2.0;
     const text_y = y + (height - text_size.height) / 2.0;
-    try cmd_buffer.text(data.text, text_x, text_y, 14, content_width, data.text_color);
+    try ctx.drawText(data.text, text_x, text_y, 14, content_width, data.text_color);
 
     // Debug bounds
     ctx.drawDebugRect(x, y, width, height, color_mod.rgba(1, 0.5, 0, 0.9));

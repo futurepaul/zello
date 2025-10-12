@@ -6,6 +6,7 @@ const state_mod = @import("state.zig");
 const focus_mod = @import("../focus.zig");
 const a11y_mod = @import("../a11y.zig");
 const frame_exchange_mod = @import("frame_exchange.zig");
+const text_cache_mod = @import("text_cache.zig");
 const c_api = @import("../../renderer/c_api.zig");
 const c = c_api.c;
 
@@ -15,6 +16,7 @@ pub const WidgetContext = struct {
     // Core dependencies (opaque to widgets)
     ctx: *c.mcore_context_t,
     allocator: std.mem.Allocator,
+    frame_arena: std.mem.Allocator,
 
     // Widget services
     commands: *commands_mod.CommandBuffer,
@@ -23,16 +25,34 @@ pub const WidgetContext = struct {
     input: *frame_exchange_mod.FrameInput,
     focus: *focus_mod.FocusState,
     a11y_builder: *a11y_mod.TreeBuilder,
+    text_cache: *text_cache_mod.TextCache,
+
+    // Window properties
+    scale: f32,
 
     // Debug flags
     debug_bounds: bool,
 
     // ========================================================================
-    // Text Measurement (FFI to Rust)
+    // Text Measurement (with caching)
     // ========================================================================
 
-    /// Measure text dimensions using the rendering backend
+    /// Measure text dimensions using the rendering backend with caching
     pub fn measureText(self: *const WidgetContext, text: []const u8, font_size: f32, max_width: f32) layout_mod.Size {
+        // Use mutable self to update cache - safe because cache is designed for concurrent access
+        const mutable_self: *WidgetContext = @constCast(self);
+        return mutable_self.text_cache.measureText(
+            self.allocator,
+            self.ctx,
+            text,
+            font_size,
+            max_width,
+            self.scale,
+        );
+    }
+
+    /// Measure text without caching (for special cases)
+    pub fn measureTextUncached(self: *const WidgetContext, text: []const u8, font_size: f32, max_width: f32) layout_mod.Size {
         return layout_utils.measureText(self.ctx, text, font_size, max_width);
     }
 
@@ -76,6 +96,11 @@ pub const WidgetContext = struct {
     /// Get the command buffer for direct rendering
     pub fn commandBuffer(self: *WidgetContext) *commands_mod.CommandBuffer {
         return self.commands;
+    }
+
+    /// Draw text with automatic lifetime management (copies to frame arena)
+    pub fn drawText(self: *WidgetContext, text: [:0]const u8, x: f32, y: f32, font_size: f32, wrap_width: f32, color: @import("../color.zig").Color) !void {
+        try self.commands.text(self.frame_arena, text, x, y, font_size, wrap_width, color);
     }
 
     // ========================================================================

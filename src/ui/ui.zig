@@ -16,6 +16,7 @@ const state_mod = @import("core/state.zig");
 const context_mod = @import("core/context.zig");
 const frame_arena_mod = @import("core/frame_arena.zig");
 const frame_exchange_mod = @import("core/frame_exchange.zig");
+const text_cache_mod = @import("core/text_cache.zig");
 const c_api = @import("../renderer/c_api.zig");
 const c = c_api.c;
 const color_mod = @import("color.zig");
@@ -35,6 +36,9 @@ pub const UI = struct {
 
     // Frame exchange for cross-frame data
     frame_exchange: frame_exchange_mod.FrameExchange,
+
+    // Text measurement cache (frame-scoped)
+    text_cache: text_cache_mod.TextCache,
 
     // Persistent state management
     state: state_mod.StateStore,
@@ -67,6 +71,7 @@ pub const UI = struct {
             .a11y_builder = a11y_mod.TreeBuilder.init(allocator, 1), // root ID
             .frame_arena = try frame_arena_mod.FrameArena.init(allocator, initial_arena_size),
             .frame_exchange = frame_exchange_mod.FrameExchange.init(allocator),
+            .text_cache = text_cache_mod.TextCache.init(),
             .state = state_mod.StateStore.init(allocator),
             .input = frame_exchange_mod.FrameInput{},
             .layout_stack = .{},
@@ -85,6 +90,7 @@ pub const UI = struct {
         self.state.deinit();
         self.frame_arena.deinit();
         self.frame_exchange.deinit();
+        self.text_cache.deinit(self.allocator);
         self.layout_stack.deinit(self.allocator);
     }
 
@@ -100,6 +106,9 @@ pub const UI = struct {
 
         // Swap frame exchange buffers and recompute interaction state
         self.frame_exchange.beginFrame(&self.frame_arena, self.input);
+
+        // Reset text cache (uses persistent allocator for map storage, but cleared each frame)
+        self.text_cache.beginFrame(self.allocator);
 
         // Reset accessibility tree
         self.a11y_builder.deinit();
@@ -149,6 +158,31 @@ pub const UI = struct {
         return self.frame_arena.allocator();
     }
 
+    /// Get text measurement statistics for instrumentation
+    pub fn getTextStats(self: *UI) struct { measure_calls: u32, offset_calls: u32 } {
+        var stats: c.mcore_text_stats_t = undefined;
+        c.mcore_get_text_stats(self.ctx, &stats);
+        return .{
+            .measure_calls = stats.total_measure_calls,
+            .offset_calls = stats.total_offset_calls,
+        };
+    }
+
+    /// Reset text measurement statistics
+    pub fn resetTextStats(self: *UI) void {
+        c.mcore_reset_text_stats(self.ctx);
+    }
+
+    /// Get text cache statistics
+    pub fn getTextCacheStats(self: *UI) text_cache_mod.CacheStats {
+        return self.text_cache.getStats();
+    }
+
+    /// Get text cache hit rate as percentage
+    pub fn getTextCacheHitRate(self: *UI) f32 {
+        return self.text_cache.getHitRate();
+    }
+
     // ============================================================================
     // Widget Context Creation
     // ============================================================================
@@ -159,12 +193,15 @@ pub const UI = struct {
         return .{
             .ctx = self.ctx,
             .allocator = self.allocator,
+            .frame_arena = self.frameAllocator(),
             .commands = &self.commands,
             .state = &self.state,
             .frame_exchange = &self.frame_exchange,
             .input = &self.input,
             .focus = &self.focus,
             .a11y_builder = &self.a11y_builder,
+            .text_cache = &self.text_cache,
+            .scale = self.scale,
             .debug_bounds = self.debug_bounds,
         };
     }
@@ -462,9 +499,12 @@ pub const UI = struct {
             @panic("label() called outside layout! Use beginVstack/beginHstack first.");
         }
 
+        // Duplicate text into frame arena to ensure it remains valid until rendering
+        const text_copy = try self.frameAllocator().dupeZ(u8, text);
+
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
         try frame.children.append(self.frameAllocator(), .{
-            .label = .{ .text = text, .opts = opts },
+            .label = .{ .text = text_copy, .opts = opts },
         });
     }
 
@@ -479,10 +519,13 @@ pub const UI = struct {
         const id = self.id_system.getCurrentID();
         self.id_system.popID();
 
+        // Duplicate text into frame arena to ensure it remains valid until rendering
+        const text_copy = try self.frameAllocator().dupeZ(u8, label_text);
+
         // Store button data for deferred rendering
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
         try frame.children.append(self.frameAllocator(), .{
-            .button = .{ .id = id, .text = label_text, .opts = opts },
+            .button = .{ .id = id, .text = text_copy, .opts = opts },
         });
 
         // Check if this button was clicked in the previous frame's rendering pass
@@ -510,10 +553,13 @@ pub const UI = struct {
         const id = self.id_system.getCurrentID();
         self.id_system.popID();
 
+        // Duplicate id_str into frame arena to ensure it remains valid until rendering
+        const id_str_copy = try self.frameAllocator().dupe(u8, id_str);
+
         // Store text input data for deferred rendering
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
         try frame.children.append(self.frameAllocator(), .{
-            .text_input = .{ .id = id, .id_str = id_str, .buffer = buffer, .opts = opts },
+            .text_input = .{ .id = id, .id_str = id_str_copy, .buffer = buffer, .opts = opts },
         });
 
         // Return false during declaration phase

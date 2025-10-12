@@ -87,8 +87,13 @@ pub const CommandBuffer = struct {
         self.count += 1;
     }
 
-    pub fn text(self: *CommandBuffer, str: [*:0]const u8, x: f32, y: f32, font_size: f32, wrap_width: f32, col: Color) !void {
+    /// Add a text command, duplicating the string into the frame arena for safety
+    /// This ensures the text pointer remains valid until the frame is rendered
+    pub fn text(self: *CommandBuffer, frame_arena: std.mem.Allocator, str: [:0]const u8, x: f32, y: f32, font_size: f32, wrap_width: f32, col: Color) !void {
         if (self.count >= self.commands.len) return error.BufferFull;
+
+        // Duplicate the string into the frame arena to ensure it remains valid until rendering
+        const text_copy = try frame_arena.dupeZ(u8, str);
 
         self.commands[self.count] = .{
             .kind = .Text,
@@ -98,7 +103,7 @@ pub const CommandBuffer = struct {
             .height = 0,
             .radius = 0,
             .color = .{ col.r, col.g, col.b, col.a },
-            .text_ptr = str,
+            .text_ptr = text_copy.ptr,
             .font_size = font_size,
             .wrap_width = wrap_width,
             .font_id = 0,
