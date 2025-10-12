@@ -16,7 +16,6 @@ pub const WidgetContext = struct {
     // Core dependencies (opaque to widgets)
     ctx: *c.mcore_context_t,
     allocator: std.mem.Allocator,
-    frame_arena: std.mem.Allocator,
 
     // Widget services
     commands: *commands_mod.CommandBuffer,
@@ -98,9 +97,10 @@ pub const WidgetContext = struct {
         return self.commands;
     }
 
-    /// Draw text with automatic lifetime management (copies to frame arena)
-    pub fn drawText(self: *WidgetContext, text: [:0]const u8, x: f32, y: f32, font_size: f32, wrap_width: f32, color: @import("../color.zig").Color) !void {
-        try self.commands.text(self.frame_arena, text, x, y, font_size, wrap_width, color);
+    /// Draw text
+    /// IMPORTANT: Text pointer must remain valid until frame is rendered
+    pub fn drawText(self: *WidgetContext, text: [*:0]const u8, x: f32, y: f32, font_size: f32, wrap_width: f32, color: @import("../color.zig").Color) !void {
+        try self.commands.text(text, x, y, font_size, wrap_width, color);
     }
 
     // ========================================================================

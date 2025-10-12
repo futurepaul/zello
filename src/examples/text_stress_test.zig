@@ -127,23 +127,25 @@ fn onFrame(ui: *zello.UI, time: f64) void {
     ui.endVstack(); // End root vstack
 }
 
+// Global stats strings (persists across renderStatsHeader calls)
+var g_stats_strings = struct {
+    hit_rate: [128]u8 = undefined,
+    hits: [128]u8 = undefined,
+    misses: [128]u8 = undefined,
+    entries: [128]u8 = undefined,
+    measure_calls: [128]u8 = undefined,
+    offset_calls: [128]u8 = undefined,
+    ffi_ratio: [128]u8 = undefined,
+    arena_current: [128]u8 = undefined,
+    arena_peak: [128]u8 = undefined,
+    frame_time: [128]u8 = undefined,
+}{};
+
 fn renderStatsHeader(ui: *zello.UI) void {
     const stats = ui.getTextStats();
     const cache_stats = ui.getTextCacheStats();
     const arena_stats = ui.frame_arena.getStats();
     const hit_rate = ui.getTextCacheHitRate();
-
-    // Persistent buffers for the entire function (zeroed to avoid garbage)
-    var buf1: [128]u8 = [_]u8{0} ** 128;
-    var buf2: [128]u8 = [_]u8{0} ** 128;
-    var buf3: [128]u8 = [_]u8{0} ** 128;
-    var buf4: [128]u8 = [_]u8{0} ** 128;
-    var buf5: [128]u8 = [_]u8{0} ** 128;
-    var buf6: [128]u8 = [_]u8{0} ** 128;
-    var buf7: [128]u8 = [_]u8{0} ** 128;
-    var buf8: [128]u8 = [_]u8{0} ** 128;
-    var buf9: [128]u8 = [_]u8{0} ** 128;
-    var buf10: [128]u8 = [_]u8{0} ** 128;
 
     // Stats panel with colored background
     ui.beginVstack(.{ .gap = 5, .padding = 12 }) catch return;
@@ -162,17 +164,17 @@ fn renderStatsHeader(ui: *zello.UI) void {
     ui.beginVstack(.{ .gap = 3, .padding = 0 }) catch return;
     ui.label("Cache Performance:", .{ .size = STATS_SIZE, .color = BLACK }) catch {};
 
-    const hit_rate_text = std.fmt.bufPrintZ(&buf1, "Hit Rate: {d:.1}%", .{hit_rate}) catch "?";
+    const hit_rate_text = std.fmt.bufPrintZ(&g_stats_strings.hit_rate, "Hit Rate: {d:.1}%", .{hit_rate}) catch "?";
     const hit_rate_color = if (hit_rate > 90) GREEN else if (hit_rate > 70) color.rgba(0.8, 0.6, 0.2, 1) else color.rgba(0.8, 0.2, 0.2, 1);
     ui.label(hit_rate_text, .{ .size = STATS_SIZE, .color = hit_rate_color }) catch {};
 
-    const hits_text = std.fmt.bufPrintZ(&buf2, "Hits: {d}", .{cache_stats.hits}) catch "?";
+    const hits_text = std.fmt.bufPrintZ(&g_stats_strings.hits, "Hits: {d}", .{cache_stats.hits}) catch "?";
     ui.label(hits_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
-    const misses_text = std.fmt.bufPrintZ(&buf3, "Misses: {d}", .{cache_stats.misses}) catch "?";
+    const misses_text = std.fmt.bufPrintZ(&g_stats_strings.misses, "Misses: {d}", .{cache_stats.misses}) catch "?";
     ui.label(misses_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
-    const entries_text = std.fmt.bufPrintZ(&buf4, "Entries: {d}", .{cache_stats.unique_entries}) catch "?";
+    const entries_text = std.fmt.bufPrintZ(&g_stats_strings.entries, "Entries: {d}", .{cache_stats.unique_entries}) catch "?";
     ui.label(entries_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
     ui.endVstack();
 
@@ -180,17 +182,17 @@ fn renderStatsHeader(ui: *zello.UI) void {
     ui.beginVstack(.{ .gap = 3, .padding = 0 }) catch return;
     ui.label("Rust FFI Calls:", .{ .size = STATS_SIZE, .color = BLACK }) catch {};
 
-    const measure_text = std.fmt.bufPrintZ(&buf5, "measure(): {d}", .{stats.measure_calls}) catch "?";
+    const measure_text = std.fmt.bufPrintZ(&g_stats_strings.measure_calls, "measure(): {d}", .{stats.measure_calls}) catch "?";
     ui.label(measure_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
-    const offset_text = std.fmt.bufPrintZ(&buf6, "offset(): {d}", .{stats.offset_calls}) catch "?";
+    const offset_text = std.fmt.bufPrintZ(&g_stats_strings.offset_calls, "offset(): {d}", .{stats.offset_calls}) catch "?";
     ui.label(offset_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
     // Show ratio
     const total_requests = cache_stats.hits + cache_stats.misses;
     if (total_requests > 0) {
         const ratio = @as(f32, @floatFromInt(stats.measure_calls)) / @as(f32, @floatFromInt(total_requests));
-        const ratio_text = std.fmt.bufPrintZ(&buf7, "FFI Ratio: {d:.2}x", .{ratio}) catch "?";
+        const ratio_text = std.fmt.bufPrintZ(&g_stats_strings.ffi_ratio, "FFI Ratio: {d:.2}x", .{ratio}) catch "?";
         ui.label(ratio_text, .{ .size = STATS_SIZE, .color = GREEN }) catch {};
     }
     ui.endVstack();
@@ -199,13 +201,13 @@ fn renderStatsHeader(ui: *zello.UI) void {
     ui.beginVstack(.{ .gap = 3, .padding = 0 }) catch return;
     ui.label("Frame Arena:", .{ .size = STATS_SIZE, .color = BLACK }) catch {};
 
-    const current_text = std.fmt.bufPrintZ(&buf8, "Current: {d} KB", .{arena_stats.current_usage / 1024}) catch "?";
+    const current_text = std.fmt.bufPrintZ(&g_stats_strings.arena_current, "Current: {d} KB", .{arena_stats.current_usage / 1024}) catch "?";
     ui.label(current_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
-    const peak_text = std.fmt.bufPrintZ(&buf9, "Peak: {d} KB", .{arena_stats.peak_usage / 1024}) catch "?";
+    const peak_text = std.fmt.bufPrintZ(&g_stats_strings.arena_peak, "Peak: {d} KB", .{arena_stats.peak_usage / 1024}) catch "?";
     ui.label(peak_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
-    const capacity_text = std.fmt.bufPrintZ(&buf10, "Capacity: {d} KB", .{arena_stats.capacity / 1024}) catch "?";
+    const capacity_text = std.fmt.bufPrintZ(&g_stats_strings.frame_time, "Capacity: {d} KB", .{arena_stats.capacity / 1024}) catch "?";
     ui.label(capacity_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
     ui.endVstack();
 

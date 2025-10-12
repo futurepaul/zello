@@ -85,13 +85,13 @@ pub fn render(
         opts.shadow,
     );
 
-    // Draw text (centered, safely copied to frame arena)
+    // Draw text (centered)
     const font_size: f32 = 18;
     const text_size = ctx.measureText(text, font_size, 1000);
     const text_x = x + (width - text_size.width) / 2.0;
     const text_y = y + (height - text_size.height) / 2.0;
     const text_color = opts.text_color orelse color_mod.WHITE;
-    try ctx.drawText(text, text_x, text_y, font_size, text_size.width, text_color);
+    try ctx.drawText(text.ptr, text_x, text_y, font_size, text_size.width, text_color);
 
     // Register clickable for next frame (includes bounds for hit testing)
     try ctx.registerClickable(id, .Button, bounds);

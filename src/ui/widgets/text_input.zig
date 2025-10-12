@@ -107,14 +107,12 @@ pub fn render(
         try cmd_buffer.roundedRect(highlight_x, text_y, highlight_width, text_size.height, 2, selection_color);
     }
 
-    // Draw text (safely copied to frame arena)
+    // Draw text
     const text_color = color_mod.WHITE;
     const text_x = x + PADDING_X - widget_state.scroll_offset;
     // Only draw text if there's content
     if (text.len > 0) {
-        // Convert C-style pointer to Zig slice for safe API
-        const text_slice: [:0]const u8 = text[0..text.len :0];
-        try ctx.drawText(text_slice, text_x, text_y, 16, max_width_no_wrap, text_color);
+        try ctx.drawText(text_ptr, text_x, text_y, 16, max_width_no_wrap, text_color);
     }
 
     // Draw cursor

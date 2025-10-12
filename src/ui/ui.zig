@@ -198,7 +198,6 @@ pub const UI = struct {
         return .{
             .ctx = self.ctx,
             .allocator = self.allocator,
-            .frame_arena = self.frameAllocator(),
             .commands = &self.commands,
             .state = &self.state,
             .frame_exchange = &self.frame_exchange,
@@ -504,12 +503,9 @@ pub const UI = struct {
             @panic("label() called outside layout! Use beginVstack/beginHstack first.");
         }
 
-        // Duplicate text into frame arena to ensure it remains valid until rendering
-        const text_copy = try self.frameAllocator().dupeZ(u8, text);
-
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
         try frame.children.append(self.frameAllocator(), .{
-            .label = .{ .text = text_copy, .opts = opts },
+            .label = .{ .text = text, .opts = opts },
         });
     }
 
@@ -524,13 +520,10 @@ pub const UI = struct {
         const id = self.id_system.getCurrentID();
         self.id_system.popID();
 
-        // Duplicate text into frame arena to ensure it remains valid until rendering
-        const text_copy = try self.frameAllocator().dupeZ(u8, label_text);
-
         // Store button data for deferred rendering
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
         try frame.children.append(self.frameAllocator(), .{
-            .button = .{ .id = id, .text = text_copy, .opts = opts },
+            .button = .{ .id = id, .text = label_text, .opts = opts },
         });
 
         // Check if this button was clicked in the previous frame's rendering pass
@@ -558,13 +551,10 @@ pub const UI = struct {
         const id = self.id_system.getCurrentID();
         self.id_system.popID();
 
-        // Duplicate id_str into frame arena to ensure it remains valid until rendering
-        const id_str_copy = try self.frameAllocator().dupe(u8, id_str);
-
         // Store text input data for deferred rendering
         var frame = &self.layout_stack.items[self.layout_stack.items.len - 1];
         try frame.children.append(self.frameAllocator(), .{
-            .text_input = .{ .id = id, .id_str = id_str_copy, .buffer = buffer, .opts = opts },
+            .text_input = .{ .id = id, .id_str = id_str, .buffer = buffer, .opts = opts },
         });
 
         // Return false during declaration phase
