@@ -67,19 +67,26 @@ pub const TextCache = struct {
         self.map.deinit(allocator);
     }
 
-    /// Begin a new frame - reset stats and clear the map
-    /// Note: Uses persistent allocator (passed in) for the map storage,
-    /// but clears it each frame to act as a frame-scoped cache
+    /// Begin a new frame - reset stats only, keep cached measurements
+    /// The cache persists across frames for better performance
+    /// Call invalidate() if font configuration or scale changes
     pub fn beginFrame(self: *TextCache, persistent_allocator: std.mem.Allocator) void {
-        self.map.clearRetainingCapacity();
-        self.stats = .{};
-        self.stats.unique_entries = 0;
+        // Reset per-frame stats but keep the cache entries
+        self.stats.hits = 0;
+        self.stats.misses = 0;
+        self.stats.unique_entries = @intCast(self.map.count());
 
         // Pre-allocate based on typical usage (can tune this)
         // Use persistent allocator because frame arena doesn't support reallocation
         if (self.map.capacity() == 0) {
             self.map.ensureTotalCapacity(persistent_allocator, 128) catch {};
         }
+    }
+
+    /// Invalidate the entire cache (call when font configuration or scale changes)
+    pub fn invalidate(self: *TextCache) void {
+        self.map.clearRetainingCapacity();
+        self.stats.unique_entries = 0;
     }
 
     /// Measure text with caching

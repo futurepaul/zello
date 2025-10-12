@@ -142,6 +142,11 @@ pub const UI = struct {
     }
 
     pub fn updateSize(self: *UI, width: f32, height: f32, scale: f32) void {
+        // Invalidate text cache if scale changed (affects measurements)
+        if (self.scale != scale) {
+            self.text_cache.invalidate();
+        }
+
         self.width = width;
         self.height = height;
         self.scale = scale;
