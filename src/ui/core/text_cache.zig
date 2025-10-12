@@ -19,21 +19,24 @@ const CacheKey = struct {
             .scale = @bitCast(scale),
         };
     }
+};
 
-    fn eql(a: CacheKey, b: CacheKey) bool {
-        return a.text_hash == b.text_hash and
-            a.font_size == b.font_size and
-            a.max_width == b.max_width and
-            a.scale == b.scale;
-    }
-
-    fn hash(key: CacheKey) u64 {
+/// Context for CacheKey hash map
+const CacheKeyContext = struct {
+    pub fn hash(_: CacheKeyContext, key: CacheKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
         hasher.update(std.mem.asBytes(&key.text_hash));
         hasher.update(std.mem.asBytes(&key.font_size));
         hasher.update(std.mem.asBytes(&key.max_width));
         hasher.update(std.mem.asBytes(&key.scale));
         return hasher.final();
+    }
+
+    pub fn eql(_: CacheKeyContext, a: CacheKey, b: CacheKey) bool {
+        return a.text_hash == b.text_hash and
+            a.font_size == b.font_size and
+            a.max_width == b.max_width and
+            a.scale == b.scale;
     }
 };
 
@@ -53,7 +56,7 @@ pub const CacheStats = struct {
 /// Frame-scoped text measurement cache
 /// Uses the frame arena for storage, so it's automatically cleared each frame
 pub const TextCache = struct {
-    map: std.AutoHashMapUnmanaged(CacheKey, CacheValue),
+    map: std.HashMapUnmanaged(CacheKey, CacheValue, CacheKeyContext, std.hash_map.default_max_load_percentage),
     stats: CacheStats,
 
     pub fn init() TextCache {
@@ -157,28 +160,31 @@ test "TextCache - basic caching" {
     const key2 = CacheKey.init("hello", 14.0, 100.0, 1.0);
     const key3 = CacheKey.init("world", 14.0, 100.0, 1.0);
 
-    try std.testing.expect(key1.eql(key2));
-    try std.testing.expect(!key1.eql(key3));
+    const ctx = CacheKeyContext{};
+    try std.testing.expect(ctx.eql(key1, key2));
+    try std.testing.expect(!ctx.eql(key1, key3));
 }
 
 test "TextCache - key sensitivity" {
+    const ctx = CacheKeyContext{};
+
     // Different text
     const k1 = CacheKey.init("hello", 14.0, 100.0, 1.0);
     const k2 = CacheKey.init("world", 14.0, 100.0, 1.0);
-    try std.testing.expect(!k1.eql(k2));
+    try std.testing.expect(!ctx.eql(k1, k2));
 
     // Different font size
     const k3 = CacheKey.init("hello", 14.0, 100.0, 1.0);
     const k4 = CacheKey.init("hello", 16.0, 100.0, 1.0);
-    try std.testing.expect(!k3.eql(k4));
+    try std.testing.expect(!ctx.eql(k3, k4));
 
     // Different max width
     const k5 = CacheKey.init("hello", 14.0, 100.0, 1.0);
     const k6 = CacheKey.init("hello", 14.0, 200.0, 1.0);
-    try std.testing.expect(!k5.eql(k6));
+    try std.testing.expect(!ctx.eql(k5, k6));
 
     // Different scale
     const k7 = CacheKey.init("hello", 14.0, 100.0, 1.0);
     const k8 = CacheKey.init("hello", 14.0, 100.0, 2.0);
-    try std.testing.expect(!k7.eql(k8));
+    try std.testing.expect(!ctx.eql(k7, k8));
 }
