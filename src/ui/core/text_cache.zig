@@ -70,13 +70,12 @@ pub const TextCache = struct {
         self.map.deinit(allocator);
     }
 
-    /// Begin a new frame - reset stats only, keep cached measurements
+    /// Begin a new frame - update unique entries count
     /// The cache persists across frames for better performance
+    /// Stats accumulate across frames to show overall effectiveness
     /// Call invalidate() if font configuration or scale changes
     pub fn beginFrame(self: *TextCache, persistent_allocator: std.mem.Allocator) void {
-        // Reset per-frame stats but keep the cache entries
-        self.stats.hits = 0;
-        self.stats.misses = 0;
+        // Update unique entries count (hits/misses accumulate, don't reset)
         self.stats.unique_entries = @intCast(self.map.count());
 
         // Pre-allocate based on typical usage (can tune this)
