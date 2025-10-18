@@ -149,76 +149,83 @@ fn renderStatsHeader(ui: *zello.UI) void {
 
     // Stats panel with colored background
     ui.beginVstack(.{ .gap = 5, .padding = 12 }) catch return;
+    {
+        ui.label("PERFORMANCE STATS (Live)", .{
+            .size = STATS_SIZE + 2,
+            .color = WHITE,
+            .bg_color = BLUE,
+            .padding = 6,
+        }) catch {};
 
-    ui.label("PERFORMANCE STATS (Live)", .{
-        .size = STATS_SIZE + 2,
-        .color = WHITE,
-        .bg_color = BLUE,
-        .padding = 6,
-    }) catch {};
+        // Create a horizontal layout for stats
+        ui.beginHstack(.{ .gap = 30, .padding = 0 }) catch return;
+        {
 
-    // Create a horizontal layout for stats
-    ui.beginHstack(.{ .gap = 30, .padding = 0 }) catch return;
+            // Column 1: Cache Performance
+            ui.beginVstack(.{ .gap = 3, .padding = 0 }) catch return;
+            {
+                ui.label("Cache Performance:", .{ .size = STATS_SIZE, .color = BLACK }) catch {};
 
-    // Column 1: Cache Performance
-    ui.beginVstack(.{ .gap = 3, .padding = 0 }) catch return;
-    ui.label("Cache Performance:", .{ .size = STATS_SIZE, .color = BLACK }) catch {};
+                const hit_rate_text = std.fmt.bufPrintZ(&g_stats_strings.hit_rate, "Hit Rate: {d:.1}%", .{hit_rate}) catch "?";
+                const hit_rate_color = if (hit_rate > 90) GREEN else if (hit_rate > 70) color.rgba(0.8, 0.6, 0.2, 1) else color.rgba(0.8, 0.2, 0.2, 1);
+                ui.label(hit_rate_text, .{ .size = STATS_SIZE, .color = hit_rate_color }) catch {};
 
-    const hit_rate_text = std.fmt.bufPrintZ(&g_stats_strings.hit_rate, "Hit Rate: {d:.1}%", .{hit_rate}) catch "?";
-    const hit_rate_color = if (hit_rate > 90) GREEN else if (hit_rate > 70) color.rgba(0.8, 0.6, 0.2, 1) else color.rgba(0.8, 0.2, 0.2, 1);
-    ui.label(hit_rate_text, .{ .size = STATS_SIZE, .color = hit_rate_color }) catch {};
+                const hits_text = std.fmt.bufPrintZ(&g_stats_strings.hits, "Hits: {d}", .{cache_stats.hits}) catch "?";
+                ui.label(hits_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
-    const hits_text = std.fmt.bufPrintZ(&g_stats_strings.hits, "Hits: {d}", .{cache_stats.hits}) catch "?";
-    ui.label(hits_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
+                const misses_text = std.fmt.bufPrintZ(&g_stats_strings.misses, "Misses: {d}", .{cache_stats.misses}) catch "?";
+                ui.label(misses_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
-    const misses_text = std.fmt.bufPrintZ(&g_stats_strings.misses, "Misses: {d}", .{cache_stats.misses}) catch "?";
-    ui.label(misses_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
+                const entries_text = std.fmt.bufPrintZ(&g_stats_strings.entries, "Entries: {d}", .{cache_stats.unique_entries}) catch "?";
+                ui.label(entries_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
+            }
+            ui.endVstack();
 
-    const entries_text = std.fmt.bufPrintZ(&g_stats_strings.entries, "Entries: {d}", .{cache_stats.unique_entries}) catch "?";
-    ui.label(entries_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
-    ui.endVstack();
+            // Column 2: Rust FFI Calls
+            ui.beginVstack(.{ .gap = 3, .padding = 0 }) catch return;
+            {
+                ui.label("Rust FFI Calls:", .{ .size = STATS_SIZE, .color = BLACK }) catch {};
 
-    // Column 2: Rust FFI Calls
-    ui.beginVstack(.{ .gap = 3, .padding = 0 }) catch return;
-    ui.label("Rust FFI Calls:", .{ .size = STATS_SIZE, .color = BLACK }) catch {};
+                const measure_text = std.fmt.bufPrintZ(&g_stats_strings.measure_calls, "measure(): {d}", .{stats.measure_calls}) catch "?";
+                ui.label(measure_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
-    const measure_text = std.fmt.bufPrintZ(&g_stats_strings.measure_calls, "measure(): {d}", .{stats.measure_calls}) catch "?";
-    ui.label(measure_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
+                const offset_text = std.fmt.bufPrintZ(&g_stats_strings.offset_calls, "offset(): {d}", .{stats.offset_calls}) catch "?";
+                ui.label(offset_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
 
-    const offset_text = std.fmt.bufPrintZ(&g_stats_strings.offset_calls, "offset(): {d}", .{stats.offset_calls}) catch "?";
-    ui.label(offset_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
+                // Show ratio
+                const total_requests = cache_stats.hits + cache_stats.misses;
+                if (total_requests > 0) {
+                    const ratio = @as(f32, @floatFromInt(stats.measure_calls)) / @as(f32, @floatFromInt(total_requests));
+                    const ratio_text = std.fmt.bufPrintZ(&g_stats_strings.ffi_ratio, "FFI Ratio: {d:.2}x", .{ratio}) catch "?";
+                    ui.label(ratio_text, .{ .size = STATS_SIZE, .color = GREEN }) catch {};
+                }
+            }
+            ui.endVstack();
 
-    // Show ratio
-    const total_requests = cache_stats.hits + cache_stats.misses;
-    if (total_requests > 0) {
-        const ratio = @as(f32, @floatFromInt(stats.measure_calls)) / @as(f32, @floatFromInt(total_requests));
-        const ratio_text = std.fmt.bufPrintZ(&g_stats_strings.ffi_ratio, "FFI Ratio: {d:.2}x", .{ratio}) catch "?";
-        ui.label(ratio_text, .{ .size = STATS_SIZE, .color = GREEN }) catch {};
+            // Column 3: Memory
+            ui.beginVstack(.{ .gap = 3, .padding = 0 }) catch return;
+            {
+                ui.label("Frame Arena:", .{ .size = STATS_SIZE, .color = BLACK }) catch {};
+
+                const current_text = std.fmt.bufPrintZ(&g_stats_strings.arena_current, "Current: {d} KB", .{arena_stats.current_usage / 1024}) catch "?";
+                ui.label(current_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
+
+                const peak_text = std.fmt.bufPrintZ(&g_stats_strings.arena_peak, "Peak: {d} KB", .{arena_stats.peak_usage / 1024}) catch "?";
+                ui.label(peak_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
+
+                const capacity_text = std.fmt.bufPrintZ(&g_stats_strings.frame_time, "Capacity: {d} KB", .{arena_stats.capacity / 1024}) catch "?";
+                ui.label(capacity_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
+            }
+            ui.endVstack();
+        }
+        ui.endHstack(); // End stats columns
+
+        // Instructions
+        ui.label("→ Resize the window to trigger text reflow and see cache effectiveness!", .{
+            .size = STATS_SIZE,
+            .color = BLUE,
+            .padding = 4,
+        }) catch {};
     }
-    ui.endVstack();
-
-    // Column 3: Memory
-    ui.beginVstack(.{ .gap = 3, .padding = 0 }) catch return;
-    ui.label("Frame Arena:", .{ .size = STATS_SIZE, .color = BLACK }) catch {};
-
-    const current_text = std.fmt.bufPrintZ(&g_stats_strings.arena_current, "Current: {d} KB", .{arena_stats.current_usage / 1024}) catch "?";
-    ui.label(current_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
-
-    const peak_text = std.fmt.bufPrintZ(&g_stats_strings.arena_peak, "Peak: {d} KB", .{arena_stats.peak_usage / 1024}) catch "?";
-    ui.label(peak_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
-
-    const capacity_text = std.fmt.bufPrintZ(&g_stats_strings.frame_time, "Capacity: {d} KB", .{arena_stats.capacity / 1024}) catch "?";
-    ui.label(capacity_text, .{ .size = STATS_SIZE, .color = DARK_GRAY }) catch {};
-    ui.endVstack();
-
-    ui.endHstack(); // End stats columns
-
-    // Instructions
-    ui.label("→ Resize the window to trigger text reflow and see cache effectiveness!", .{
-        .size = STATS_SIZE,
-        .color = BLUE,
-        .padding = 4,
-    }) catch {};
-
     ui.endVstack(); // End stats panel
 }
