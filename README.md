@@ -4,11 +4,7 @@
 
 *Zig owns UI. Rust is a text specialist. One-way delegation.*
 
-## Status
-
-✅ **Library restructuring complete!** The project has been reorganized into a clean, ergonomic API.
-
-See [THE_PLAN.md](THE_PLAN.md) for the architectural vision and [CLEANUP_AND_LIBRARYIFY.md](CLEANUP_AND_LIBRARYIFY.md) for the refactoring plan.
+This has only been tested on Mac so far, but there's a wip iOS port in the `ios` branch.
 
 ## Features
 
