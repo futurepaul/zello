@@ -6,6 +6,8 @@
 
 This has only been tested on Mac so far, but there's a wip iOS port in the `ios` branch.
 
+<img width="1112" height="840" alt="Screenshot 2026-01-15 at 10 19 43 AM" src="https://github.com/user-attachments/assets/54d5ee29-fdfd-4584-b3e2-9c52121feb8b" />
+
 ## Features
 
 - ✅ Immediate-mode UI (ImGui-style)
