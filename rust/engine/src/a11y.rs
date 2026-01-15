@@ -3,6 +3,7 @@ use accesskit::{
     Action, ActionHandler, ActionRequest, ActivationHandler, NodeId,
     TreeUpdate,
 };
+#[cfg(target_os = "macos")]
 use accesskit_macos::SubclassingAdapter;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -95,17 +96,19 @@ impl ActivationHandler for A11yActivationHandler {
     }
 }
 
-/// Main accessibility adapter - wraps the macOS platform adapter
+/// Main accessibility adapter - wraps the platform adapter
 pub struct AccessibilityAdapter {
+    #[cfg(target_os = "macos")]
     adapter: Option<Arc<Mutex<SubclassingAdapter>>>,
     state: Arc<Mutex<AccessibilityState>>,
 }
 
 impl AccessibilityAdapter {
-    /// Create a new adapter for the given NSView
+    /// Create a new adapter for the given NSView (macOS) or UIView (iOS)
     ///
     /// # Safety
-    /// view_ptr must be a valid pointer to an NSView
+    /// view_ptr must be a valid pointer to an NSView (macOS) or UIView (iOS)
+    #[cfg(target_os = "macos")]
     pub unsafe fn new(view_ptr: *mut std::ffi::c_void) -> Self {
         let state = Arc::new(Mutex::new(AccessibilityState::new()));
 
@@ -124,6 +127,18 @@ impl AccessibilityAdapter {
         }
     }
 
+    /// Create a stub adapter for iOS (accessibility not yet implemented)
+    ///
+    /// # Safety
+    /// view_ptr must be a valid pointer to a UIView
+    #[cfg(not(target_os = "macos"))]
+    pub unsafe fn new(_view_ptr: *mut std::ffi::c_void) -> Self {
+        let state = Arc::new(Mutex::new(AccessibilityState::new()));
+        Self {
+            state,
+        }
+    }
+
     /// Update the accessibility tree
     pub fn update_tree(&self, tree: TreeUpdate) {
         {
@@ -131,9 +146,12 @@ impl AccessibilityAdapter {
             state.set_tree(tree.clone());
         }
 
-        if let Some(adapter) = &self.adapter {
-            let mut adapter = adapter.lock();
-            adapter.update_if_active(|| tree);
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(adapter) = &self.adapter {
+                let mut adapter = adapter.lock();
+                adapter.update_if_active(|| tree);
+            }
         }
     }
 
@@ -145,10 +163,13 @@ impl AccessibilityAdapter {
             state.get_tree()
         };
 
-        if let Some(adapter) = &self.adapter {
-            if let Some(tree) = tree {
-                let mut adapter = adapter.lock();
-                adapter.update_if_active(|| tree);
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(adapter) = &self.adapter {
+                if let Some(tree) = tree {
+                    let mut adapter = adapter.lock();
+                    adapter.update_if_active(|| tree);
+                }
             }
         }
     }
