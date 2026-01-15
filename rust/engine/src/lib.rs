@@ -39,6 +39,7 @@ pub enum McorePlatform {
     Windows = 2,
     X11 = 3,
     Wayland = 4,
+    IOS = 5,
 }
 
 #[repr(C)]
@@ -219,9 +220,9 @@ pub struct McoreContext(Arc<Mutex<Engine>>);
 pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreContext {
     let desc = unsafe { desc.as_ref() }.unwrap();
     match desc.platform {
-        McorePlatform::MacOS => {
+        McorePlatform::MacOS | McorePlatform::IOS => {
             let mac = unsafe { desc.u.macos };
-            // Convert to gfx::MacSurface
+            // Convert to gfx::MacSurface (same for iOS)
             let mac_surface = gfx::MacSurface {
                 ns_view: mac.ns_view,
                 ca_metal_layer: mac.ca_metal_layer,
@@ -229,7 +230,7 @@ pub extern "C" fn mcore_create(desc: *const McoreSurfaceDesc) -> *mut McoreConte
                 width_px: mac.width_px,
                 height_px: mac.height_px,
             };
-            // block_on in a new thread so we don't block AppKit
+            // block_on in a new thread so we don't block AppKit/UIKit
             match pollster::block_on(gfx::Gfx::new_macos(&mac_surface)) {
                 Ok(engine) => {
                     let eng = Engine {
@@ -269,17 +270,20 @@ pub extern "C" fn mcore_destroy(ctx: *mut McoreContext) {
 pub extern "C" fn mcore_resize(ctx: *mut McoreContext, desc: *const McoreSurfaceDesc) {
     let ctx = unsafe { ctx.as_mut() }.unwrap();
     let desc = unsafe { desc.as_ref() }.unwrap();
-    if let McorePlatform::MacOS = desc.platform {
-        let mac = unsafe { desc.u.macos };
-        let mac_surface = gfx::MacSurface {
-            ns_view: mac.ns_view,
-            ca_metal_layer: mac.ca_metal_layer,
-            scale_factor: mac.scale_factor,
-            width_px: mac.width_px,
-            height_px: mac.height_px,
-        };
-        let mut guard = ctx.0.lock();
-        let _ = guard.gfx.resize(&mac_surface);
+    match desc.platform {
+        McorePlatform::MacOS | McorePlatform::IOS => {
+            let mac = unsafe { desc.u.macos };
+            let mac_surface = gfx::MacSurface {
+                ns_view: mac.ns_view,
+                ca_metal_layer: mac.ca_metal_layer,
+                scale_factor: mac.scale_factor,
+                width_px: mac.width_px,
+                height_px: mac.height_px,
+            };
+            let mut guard = ctx.0.lock();
+            let _ = guard.gfx.resize(&mac_surface);
+        }
+        _ => {}
     }
 }
 
