@@ -11,15 +11,16 @@ typedef enum {
   MCORE_PLATFORM_WINDOWS = 2,
   MCORE_PLATFORM_X11 = 3,
   MCORE_PLATFORM_WAYLAND = 4,
+  MCORE_PLATFORM_IOS = 5,
 } mcore_platform_t;
 
 typedef struct {
-  void* ns_view;        // NSView*
+  void* ns_view;        // NSView* (macOS) or UIView* (iOS)
   void* ca_metal_layer; // CAMetalLayer*
   float scale_factor;
   int   width_px;
   int   height_px;
-} mcore_macos_surface_t;
+} mcore_macos_surface_t;  // Also used for iOS
 
 typedef union {
   mcore_macos_surface_t macos;

@@ -71,8 +71,13 @@ pub fn init(
     const ca_layer = mv_get_metal_layer() orelse return error.NoLayer;
 
     // Create surface description
+    const platform = if (@import("builtin").os.tag == .ios)
+        c.MCORE_PLATFORM_IOS
+    else
+        c.MCORE_PLATFORM_MACOS;
+
     g_desc = .{
-        .platform = c.MCORE_PLATFORM_MACOS,
+        .platform = platform,
         .u = .{
             .macos = .{
                 .ns_view = ns_view,
